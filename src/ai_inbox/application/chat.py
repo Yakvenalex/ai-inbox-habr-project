@@ -9,6 +9,7 @@ from typing import Any
 from ai_inbox.domain.entities import ChatRun, Conversation, Message
 from ai_inbox.domain.errors import AppError, Conflict, InvalidInput
 
+from .chat_outgoing import confirms_sending, delivery_answer, pending_review
 from .ports import AssistantGateway, Clock, FileStorage, UowFactory
 from .tasks import public
 from .tools import AssistantTools
@@ -36,12 +37,13 @@ class ChatWithAssistant:
             await uow.commit()
         result = public(conversation)
         result.pop("sdk_history")
+        result.pop("pending_email")
         return result
 
     async def list_conversations(self) -> list[dict[str, Any]]:
         async with self.uow() as uow:
             return [
-                {k: v for k, v in public(c).items() if k != "sdk_history"}
+                {k: v for k, v in public(c).items() if k not in {"sdk_history", "pending_email"}}
                 for c in await uow.conversations.list()
             ]
 
@@ -139,15 +141,35 @@ class ChatWithAssistant:
                 created_at=self.clock.now(),
             )
             async with self.uow() as uow:
+                # A review applies only to the next user turn in this conversation.
+                # Revoke it durably BEFORE any model/tool/SMTP call, including crashes.
+                review = conversation.pending_email
+                confirmed_send = bool(review and not image_id and confirms_sending(text))
+                conversation.pending_email = None
+                await uow.conversations.save(conversation)
                 await uow.runs.add(run)
                 await uow.messages.add(user)
                 await uow.commit()
             tools = self.tools_factory(conversation_id + ":" + request_id, text)
+            if confirmed_send:
+                tools.confirmed_email = review
             error = None
             try:
-                answer, sdk_history = await self.assistant.chat(inputs, tools, self.clock.now())
-                conversation.sdk_history = self._deflate(sdk_history, image_urls)
-                run.status = "completed"
+                if confirmed_send:
+                    # Confirmation does not need a model to choose whether/what to send.
+                    result = await tools("send_outgoing_email", {}, "confirmed-send")
+                    answer, error = delivery_answer(result)
+                    conversation.sdk_history = history + [
+                        {
+                            "role": "assistant",
+                            "content": answer + "\n" + json.dumps(result, ensure_ascii=False),
+                        }
+                    ]
+                    run.status = "failed" if error else "completed"
+                else:
+                    answer, sdk_history = await self.assistant.chat(inputs, tools, self.clock.now())
+                    conversation.sdk_history = self._deflate(sdk_history, image_urls)
+                    run.status = "completed"
             except AppError as exc:
                 error, answer, run.status = exc.code, str(exc), "failed"
             except Exception as exc:
@@ -161,7 +183,12 @@ class ChatWithAssistant:
             if error:
                 successful = [a for a in actions if not a["result"].get("error")]
                 prepared = [a for a in successful if a["name"] == "prepare_outgoing_email"]
-                if prepared:
+                if confirmed_send:
+                    if error == "internal_error":
+                        answer += (
+                            "\n\nПроверь статус в исходящих перед любыми дальнейшими действиями."
+                        )
+                elif prepared:
                     answer += (
                         "\n\nЧерновик письма сохранён. Открой его по ссылке ниже, проверь текст "
                         "и подтверди отправку в редакторе. Письмо ещё не отправлено."
@@ -193,10 +220,28 @@ class ChatWithAssistant:
                 created_at=self.clock.now(),
                 updated_at=self.clock.now(),
             )
+            conversation.pending_email = (
+                pending_review(actions, assistant_message.id) if not confirmed_send else None
+            )
+            if conversation.pending_email:
+                confirmation_hint = (
+                    "Проверь получателя, тему, текст и вложения в карточке черновика ниже. "
+                    "Если всё верно, ответь «Всё ок, отправляй»."
+                )
+                assistant_message.text += "\n\n" + confirmation_hint
+                for action in actions:
+                    if action["name"] in {"prepare_outgoing_email", "review_outgoing_email"}:
+                        action["result"]["confirmation_available"] = (
+                            action["result"].get("id") == conversation.pending_email["outbox_id"]
+                            and action["result"].get("content_token")
+                            == conversation.pending_email["content_token"]
+                        )
+                # Also ground the next model turn in the application's confirmation step.
+                conversation.sdk_history.append({"role": "assistant", "content": confirmation_hint})
             run.response = {
                 "request_id": request_id,
                 "status": run.status,
-                "text": answer,
+                "text": assistant_message.text,
                 "actions": actions,
                 "message_id": assistant_message.id,
                 "error": error,

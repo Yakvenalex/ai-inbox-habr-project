@@ -91,12 +91,13 @@ async def test_real_agents_sdk_tool_cycle_and_serializable_history():
     json.dumps(history)
 
 
-def test_tools_have_strict_schemas_and_no_send():
+def test_tools_have_strict_schemas_and_send_cannot_choose_letter():
     async def execute(*args):
         return {}
 
     tools = build_tools(execute)
-    assert "send_email" not in {t.name for t in tools}
+    send = next(t for t in tools if t.name == "send_outgoing_email")
+    assert send.params_json_schema["properties"] == {}
     for tool in tools:
         schema = tool.params_json_schema
         assert schema["additionalProperties"] is False

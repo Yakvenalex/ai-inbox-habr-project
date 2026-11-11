@@ -35,6 +35,7 @@ class ConversationRow(Record, Base):
     __tablename__ = "conversations"
     title: Mapped[str] = mapped_column(String(100))
     sdk_history: Mapped[list[dict[str, Any]]] = mapped_column(JSON)
+    pending_email: Mapped[dict[str, str] | None] = mapped_column(JSON, nullable=True)
 
 
 class MessageRow(Record, Base):

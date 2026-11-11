@@ -29,7 +29,26 @@ class DemoAssistant(FakeAssistant):
             else next(item["text"] for item in content if item["type"] == "input_text")
         )
         lower = text.lower()
-        if "почту" in lower and "reader@example.test" in lower:
+        if "покаж" in lower and "чернов" in lower:
+            prior = next(
+                (
+                    item["content"]
+                    for item in reversed(history[:-1])
+                    if isinstance(item.get("content"), str)
+                    and "Подготовлен черновик " in item["content"]
+                ),
+                "",
+            )
+            import re
+
+            match = re.search(r"Подготовлен черновик ([0-9a-f-]{36})", prior)
+            result = await execute(
+                "review_outgoing_email",
+                {"outbox_id": match[1] if match else "missing"},
+                "demo-review",
+            )
+            answer = "Актуальная версия в карточке ниже."
+        elif "почту" in lower and "reader@example.test" in lower:
             result = await execute(
                 "prepare_outgoing_email",
                 {
@@ -45,8 +64,8 @@ class DemoAssistant(FakeAssistant):
                 answer = (
                     "Подготовлен черновик "
                     + result["id"]
-                    + ". Письмо ещё не отправлено: открой редактор, "
-                    "проверь текст и подтверди отправку."
+                    + ". Письмо ещё не отправлено: проверь карточку и "
+                    "подтверди отправку в чате."
                 )
         elif "созда" in lower and "задач" in lower:
             result = await execute(

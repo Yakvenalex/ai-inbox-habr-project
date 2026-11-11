@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 from typing import Any
 
-from ai_inbox.domain.entities import Action
+from ai_inbox.domain.entities import Action, PendingEmailReview
 from ai_inbox.domain.errors import AppError, Forbidden, InvalidInput
 
 from .digests import GenerateDigest
@@ -42,6 +42,7 @@ class AssistantTools:
         self.outbox = outbox
         self.user_text = user_text.lower()
         self.lock = asyncio.Lock()
+        self.confirmed_email: PendingEmailReview | None = None
 
     def _outgoing_requested(self) -> bool:
         if re.search(
@@ -63,6 +64,18 @@ class AssistantTools:
         return False
 
     def _allow_write(self, name: str) -> None:
+        if name == "send_outgoing_email" and self.confirmed_email is None:
+            raise Forbidden(
+                "Сначала покажи черновик. Отправка разрешена только после отдельного "
+                "подтверждения владельца в следующем сообщении."
+            )
+        if name == "review_outgoing_email" and not re.search(
+            r"(покаж|проверь|открой|просмотр|посмотр|проверим).{0,100}(письм|чернов)|"
+            r"(письм|чернов).{0,100}(покаж|еще раз|ещё раз|актуальн)",
+            self.user_text,
+            re.DOTALL,
+        ):
+            raise Forbidden("Просмотр черновика перед отправкой не запрошен пользователем.")
         if name == "prepare_outgoing_email" and not self._outgoing_requested():
             raise Forbidden(
                 "Подготовка письма не запрошена. Попроси написать письмо и укажи адрес получателя."
@@ -138,6 +151,8 @@ class AssistantTools:
             "create_draft": {"email_id", "subject", "body"},
             "generate_digest": set(),
             "prepare_outgoing_email": {"recipient", "subject", "body"},
+            "review_outgoing_email": {"outbox_id"},
+            "send_outgoing_email": set(),
         }
         if name not in allowed:
             raise InvalidInput("Неизвестный инструмент.")
@@ -185,6 +200,21 @@ class AssistantTools:
                 text_arg(args, "body"),
                 text_arg(args, "subject", 1000),
                 **metadata,
+            )
+        if name == "review_outgoing_email":
+            result = await self.outbox.get(text_arg(args, "outbox_id", 36))
+            if result["status"] not in {"draft", "failed"}:
+                raise InvalidInput(
+                    "Это письмо уже отправляется, отправлено или результат неизвестен."
+                )
+            return {**result, "delivery_error": result.get("error"), "error": None}
+        if name == "send_outgoing_email":
+            review = self.confirmed_email
+            if review is None:
+                raise Forbidden("Отправка не подтверждена владельцем.")
+            # The model cannot choose the recipient, body, target ID or content token.
+            return await self.outbox.send(
+                review["outbox_id"], review["delivery_request_id"], True, review["content_token"]
             )
         if name == "prepare_outgoing_email":
             recipient = text_arg(args, "recipient", 254)

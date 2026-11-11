@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, TypedDict
 from uuid import uuid4
 
 from .errors import InvalidInput
@@ -64,10 +64,18 @@ class Draft(Entity):
     status: str = "draft"
 
 
+class PendingEmailReview(TypedDict):
+    outbox_id: str
+    content_token: str
+    delivery_request_id: str
+    message_id: str
+
+
 @dataclass(kw_only=True)
 class Conversation(Entity):
     title: str = "Новый диалог"
     sdk_history: list[dict[str, Any]] = field(default_factory=list)
+    pending_email: PendingEmailReview | None = None
 
 
 @dataclass(kw_only=True)

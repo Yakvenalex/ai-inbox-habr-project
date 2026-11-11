@@ -13,6 +13,7 @@ from pathlib import Path
 from alembic import command
 from alembic.config import Config
 
+from ai_inbox.application.outgoing_dto import DeliveryResult
 from ai_inbox.bootstrap.container import Container
 from ai_inbox.bootstrap.settings import ROOT, Settings
 from ai_inbox.domain.entities import new_id
@@ -168,6 +169,63 @@ async def check_outgoing_agent(c):
     return {"status": "passed", "prepared_drafts": 1, "messages_sent": 0, "grounded_reply": True}
 
 
+async def check_chat_send(c):
+    # The model is real; SMTP is deliberately replaced for this paid workflow check.
+    class NoNetworkSender:
+        def __init__(self):
+            self.messages = []
+
+        async def send(self, message):
+            self.messages.append(message)
+            return DeliveryResult("sent")
+
+    simulated = NoNetworkSender()
+    original_sender = c.outbox.sender
+    c.outbox.sender = simulated
+    try:
+        conversation = await c.chat.create_conversation("Synthetic confirmed chat send")
+        result = await c.chat(
+            conversation["id"],
+            "Отправь на почту reader@example.test приветствие и спроси, как дела. "
+            "Перепиши вежливо. Это синтетическая проверка.",
+            new_id(),
+        )
+        if result["status"] != "completed":
+            return {
+                "status": "provider_unavailable"
+                if result["error"] == "provider_unavailable"
+                else "failed",
+                "error": result["error"],
+                "real_messages_sent": 0,
+            }
+        previews = [
+            a["result"]
+            for a in result["actions"]
+            if a["name"] == "prepare_outgoing_email" and not a["result"].get("error")
+        ]
+        assert len(previews) == 1 and previews[0]["confirmation_available"]
+        assert not simulated.messages, "Must not send while preparing"
+        request_id = new_id()
+        sent = await c.chat(conversation["id"], "Всё ок, отправляй", request_id)
+        assert sent["status"] == "completed"
+        assert sent["actions"][0]["result"]["status"] == "sent"
+        assert len(simulated.messages) == 1
+        assert simulated.messages[0].recipient == "reader@example.test"
+        assert simulated.messages[0].body == previews[0]["body"]
+        assert await c.chat(conversation["id"], "Всё ок, отправляй", request_id) == sent
+        assert len(simulated.messages) == 1
+        return {
+            "status": "passed",
+            "model": "real",
+            "smtp": "simulated",
+            "review_then_confirmation": True,
+            "idempotent": True,
+            "real_messages_sent": 0,
+        }
+    finally:
+        c.outbox.sender = original_sender
+
+
 async def check_mail_read_state(c):
     messages = await c.mail.list_emails(False, 1)
     if not messages:
@@ -230,6 +288,7 @@ async def main(args):
                 ("smtp", args.smtp, lambda: check_smtp(c)),
                 ("compose", args.compose, lambda: check_compose(c)),
                 ("outgoing_agent", args.outgoing_agent, lambda: check_outgoing_agent(c)),
+                ("chat_send", args.chat_send, lambda: check_chat_send(c)),
                 ("speech", args.speech, lambda: check_speech(c, out)),
                 ("ai", args.ai, lambda: check_ai(c)),
             ]:
@@ -279,6 +338,11 @@ if __name__ == "__main__":
         "--outgoing-agent",
         action="store_true",
         help="PAID agent prepares a synthetic outgoing draft; never sends",
+    )
+    parser.add_argument(
+        "--chat-send",
+        action="store_true",
+        help="PAID real model prepares a draft; chat confirmation uses simulated SMTP only",
     )
     parser.add_argument(
         "--mail-read-state",

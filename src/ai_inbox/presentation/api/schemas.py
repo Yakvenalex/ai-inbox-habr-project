@@ -114,7 +114,11 @@ class ConversationResponse(EntityResponse):
 
 class ChatInput(Schema):
     text: str = Field(
-        min_length=1, max_length=10000, examples=["Создай задачу проверить учебный счёт"]
+        min_length=1,
+        max_length=10000,
+        examples=["Создай задачу проверить учебный счёт", "Всё ок, отправляй"],
+        description="Отдельное подтверждение после единственного показанного черновика "
+        "запускает SMTP-отправку. Проверяй получателя, текст и вложения в actions.",
     )
     image_id: UUID | None = None
     request_id: UUID = Field(

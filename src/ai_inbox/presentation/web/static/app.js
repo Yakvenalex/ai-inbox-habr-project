@@ -512,6 +512,7 @@ async function confirmConversationDeletion() {
 
 function renderMessage(message) {
   $('#chat-welcome')?.remove();
+  if (message.role === 'user') $$('#chat-messages .chat-email-confirmation').forEach(el => el.remove());
   const wrap = node('article', message.role === 'user' ? 'rounded-xl bg-base-200 p-3' : 'py-1');
   const content = node('div', 'message-text');
   if (message.role === 'assistant') InboxMarkdown.render(content, message.text);
@@ -530,7 +531,8 @@ function renderMessage(message) {
     for (const action of actions) {
       const receipt = node('div', 'action-receipt ' + (action.result.error || action.result.status === 'failed' ? 'text-error' : ''));
       const result = action.result;
-      receipt.append(node('strong', '', action.name + (result.error ? ' · не выполнено' : ' · результат получен')));
+      const outcome = action.name === 'send_outgoing_email' && result.status === 'unknown' ? ' · результат неизвестен' : result.error ? ' · не выполнено' : ' · результат получен';
+      receipt.append(node('strong', '', action.name + outcome));
       const info = (typeof result.error === 'string' ? result.error : result.error?.message) || (result.id ? 'ID: ' + result.id : result.tasks ? 'Задач: ' + result.tasks.length : result.emails ? 'Писем: ' + result.emails.length : result.subject || 'Готово');
       receipt.append(node('p', 'source-id mt-1', info));
       if (result.id && action.name === 'create_draft') {
@@ -538,10 +540,23 @@ function renderMessage(message) {
         a.href = '/drafts/' + result.id;
         receipt.append(a);
       }
-      if (result.id && action.name === 'prepare_outgoing_email') {
+      if (result.id && ['prepare_outgoing_email', 'review_outgoing_email'].includes(action.name) && !result.error) {
+        receipt.append(node('p', 'mt-3 break-all', 'Кому: ' + result.recipient));
+        receipt.append(node('p', 'mt-2 font-semibold break-words', 'Тема: ' + result.subject));
+        receipt.append(node('p', 'mt-2 whitespace-pre-wrap break-words text-sm', result.body));
+        receipt.append(node('p', 'mt-2 opacity-70', result.attachments?.length ? 'Вложения: ' + result.attachments.map(file => file.name + ' (' + file.size + ' байт)').join(', ') : 'Без вложений'));
+        if (result.confirmation_available) receipt.append(node('p', 'chat-email-confirmation mt-3 font-medium', 'Для отправки ответь: «Всё ок, отправляй».'));
         const a = node('a', 'link', 'Открыть письмо для проверки');
         a.href = '/?view=compose&outgoing=' + encodeURIComponent(result.id);
         receipt.append(a);
+      }
+      if (action.name === 'send_outgoing_email' && result.outbox_id) {
+        const statuses = {sent: 'SMTP-сервер принял письмо', failed: 'Отправка отклонена', unknown: 'Результат неизвестен — повтор запрещён', sending: 'Отправляется'};
+        receipt.append(node('p', 'mt-2 font-semibold', statuses[result.status] || result.status));
+        if (result.message_id) receipt.append(node('p', 'source-id mt-1', 'Message-ID: ' + result.message_id));
+        const link = node('a', 'link', 'Открыть исходящее письмо');
+        link.href = '/?view=compose&outgoing=' + encodeURIComponent(result.outbox_id);
+        receipt.append(link);
       }
       if (result.id && action.name === 'generate_digest') {
         const a = node('a', 'link', 'Открыть дайджест');

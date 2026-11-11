@@ -270,7 +270,10 @@ async def messages(id: str, request: Request, owner: Owner):
     "/conversations/{id}/messages",
     response_model=ChatResponse,
     tags=["Диалоги"],
-    summary="Ответ агента и квитанции инструментов; request_id защищает от повторов",
+    summary="Чат: действия, предпросмотр письма и отдельное подтверждение отправки",
+    description="После показанного черновика ответь «Всё ок, отправляй» новым request_id. "
+    "Подтверждение связано с версией письма в этом диалоге. Повтор того же request_id "
+    "не повторяет отправку. failed и error отражают сбой, actions — реальные результаты.",
 )
 async def chat(id: str, data: ChatInput, request: Request, owner: Owner):
     return await container(request).chat(
