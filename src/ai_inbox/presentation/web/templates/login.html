@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+{% block body %}
+<main class="min-h-screen grid place-items-center p-6">
+  <section class="card bg-base-100 shadow-xl w-full max-w-md"><div class="card-body gap-5">
+    <div class="badge badge-primary badge-outline">Личный помощник</div>
+    <h1 class="text-3xl font-bold">AI Inbox</h1><p class="opacity-60">Разбери почту. Сохрани главное.</p>
+    {% if error %}<div role="alert" class="alert alert-error">{{ error }}</div>{% endif %}
+    <form action="/auth/login" method="post" class="grid gap-4">
+      <label class="form-control grid gap-2">Логин<input class="input input-bordered w-full" name="username" autocomplete="username" required autofocus></label>
+      <label class="form-control grid gap-2">Пароль<input class="input input-bordered w-full" type="password" name="password" autocomplete="current-password" required></label>
+      <button class="btn btn-primary w-full">Войти</button>
+    </form>
+    <p class="text-xs opacity-50">Один владелец · локальное хранилище · письма не отправляются</p>
+  </div></section>
+</main>
+{% endblock %}

@@ -1,0 +1,21 @@
+body { font-family: ui-sans-serif, system-ui, sans-serif; }
+:root { --color-primary: #426557; --color-primary-content: #fff; }
+.brand-icon { display:grid; place-items:center; width:36px; height:36px; background:#426557; color:white; border-radius:12px; font-size:23px; }
+.workspace { display:grid; grid-template-columns:210px minmax(360px,1fr) 390px; min-height:100vh; }
+.app-sidebar { height:100dvh; position:sticky; top:0; }
+.assistant-panel { height:100dvh; position:sticky; top:0; }
+.workspace-main { background:#f7f8fa; }
+.work-content { max-width:1100px; margin:auto; }
+.section-label { font-size:10px; letter-spacing:0.13em; font-weight:650; opacity:.45; }
+.menu button.active { background:#e9f0eb; color:#365947; font-weight:600; }
+.digest-banner { background:#e8efea; border:1px solid #d9e4dc; }
+.mail-card:hover { border-color:#7c9989; }
+.mail-card { cursor:pointer; transition: border-color .15s; }
+.mobile-nav { display:none; }
+.message-text { white-space:pre-wrap; overflow-wrap:anywhere; font-size:13px; line-height:1.8; }
+.action-receipt { font-size:11px; border:1px solid #d8e2db; padding:8px 10px; border-radius:9px; background:#f4f8f5; margin-top:8px; }
+.source-id { font-family:monospace; overflow-wrap:anywhere; font-size:11px; }
+[hidden] { display:none !important; }
+@media (min-width:1200px) { .workspace.chat-hidden { grid-template-columns:210px minmax(360px,1fr); } .chat-hidden .assistant-panel { display:none; } }
+@media (max-width:1199px) { .workspace { grid-template-columns:190px minmax(300px,1fr); } .assistant-panel { display:none; } .workspace.chat-open .assistant-panel { display:flex; position:fixed; right:0; top:0; width:min(440px,100vw); z-index:30; box-shadow:-10px 0 40px #0002; padding-top:42px; } .workspace.chat-open #chat-toggle { position:fixed; right:18px; top:8px; z-index:40; background:#e9f0eb; } }
+@media (max-width:700px) { .workspace { display:block; } .app-sidebar { display:none; } .mobile-nav { display:flex; } .workspace-main header { padding:15px; } .workspace-main header .badge { display:none; } .modal-box { max-height:90dvh; } }
