@@ -34,14 +34,14 @@ async function guard(action) {
   }
 }
 async function busy(element, action) {
-  const label = element.textContent;
+  const contents = [...element.childNodes];
   element.disabled = true;
   element.textContent = 'Подожди…';
   try {
     return await action();
   } finally {
     element.disabled = false;
-    element.textContent = label;
+    element.replaceChildren(...contents);
   }
 }
 async function api(path, options = {}) {
@@ -816,6 +816,8 @@ function initializeWorkspace() {
       sendMessage();
     }
   };
+  $('#attach-image').onclick = () => $('#image-file').click();
+  $('#upload-audio').onclick = () => $('#audio-file').click();
   $('#image-file').onchange = () => guard(async () => {
     const file = $('#image-file').files[0];
     if (!file) return;
@@ -849,12 +851,21 @@ function initializeWorkspace() {
     stream = null,
     chunks = [],
     timer = null;
+  function setRecording(active) {
+    const control = $('#record');
+    control.querySelector('[data-record-idle]').hidden = active;
+    control.querySelector('[data-record-stop]').hidden = !active;
+    control.classList.toggle('btn-error', active);
+    control.setAttribute('aria-pressed', String(active));
+    control.title = active ? 'Остановить запись' : 'Записать голос';
+    control.setAttribute('aria-label', control.title);
+  }
   $('#record').onclick = () => guard(async () => {
     if (recorder?.state === 'recording') {
       recorder.stop();
       return;
     }
-    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) throw new Error('Запись недоступна. Загрузи аудиофайл кнопкой «Аудио».');
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) throw new Error('Запись недоступна. Загрузи аудиофайл кнопкой с говорящим смайлом.');
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         audio: true
@@ -873,16 +884,14 @@ function initializeWorkspace() {
     recorder.onstop = () => {
       clearTimeout(timer);
       stream.getTracks().forEach(t => t.stop());
-      $('#record').textContent = '♩ Запись';
-      $('#record').classList.remove('btn-error');
+      setRecording(false);
       const mime = recorder.mimeType;
       guard(() => transcribe(new File(chunks, 'recording.' + (mime.includes('ogg') ? 'ogg' : 'webm'), {
         type: mime
       }), $('#record')));
     };
     recorder.start();
-    $('#record').textContent = '■ Стоп';
-    $('#record').classList.add('btn-error');
+    setRecording(true);
     timer = setTimeout(() => recorder.state === 'recording' && recorder.stop(), 295000);
   });
   guard(async () => {
