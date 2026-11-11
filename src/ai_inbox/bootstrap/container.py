@@ -3,11 +3,12 @@ from datetime import UTC, datetime
 import httpx
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, DefaultAsyncHttpxClient
 from sqlalchemy import text
 
 from ai_inbox.application.auth import Authenticate, ValidateAccessToken
 from ai_inbox.application.chat import ChatWithAssistant
+from ai_inbox.application.chat_stream import StreamChat
 from ai_inbox.application.digests import GenerateDigest
 from ai_inbox.application.drafts import Drafts
 from ai_inbox.application.mail import Mail
@@ -58,6 +59,7 @@ class Container:
                 "User-Agent": "AI-Inbox/0.1",
             },
             timeout=settings.ai_timeout_seconds,
+            trust_env=settings.anymodel_trust_env,
             limits=httpx.Limits(max_connections=5, max_keepalive_connections=3),
         )
         self.openai = AsyncOpenAI(
@@ -65,6 +67,7 @@ class Container:
             api_key=settings.main_key.get_secret_value(),
             max_retries=0,
             timeout=settings.ai_timeout_seconds,
+            http_client=DefaultAsyncHttpxClient(trust_env=settings.anymodel_trust_env),
         )
         self.assistant = assistant or AnyModelAssistant(
             self.openai,
@@ -129,6 +132,7 @@ class Container:
             ),
             self.clock,
         )
+        self.streams = StreamChat(self.chat)
         self.scheduler = make_scheduler(settings, self.digests, self.media)
 
     async def start(self):
@@ -151,6 +155,7 @@ class Container:
         self.scheduler.start()
 
     async def close(self):
+        await self.streams.close()
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
         if hasattr(self.mail_gateway, "close"):

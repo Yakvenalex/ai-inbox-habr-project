@@ -74,6 +74,13 @@ class FakeAssistant:
             raise ProviderUnavailable("AnyModel временно недоступен (HTTP 503).")
         return self.answer, history + [{"role": "assistant", "content": self.answer}]
 
+    async def chat_stream(self, history, execute, now, emit):
+        answer, updated = await self.chat(history, execute, now)
+        await emit({"type": "message_start"})
+        for word in answer.splitlines(keepends=True):
+            await emit({"type": "delta", "text": word})
+        return answer, updated
+
     async def summarize(self, context):
         self.calls += 1
         if self.fail:

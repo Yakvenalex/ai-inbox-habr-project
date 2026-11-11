@@ -29,7 +29,19 @@ class DemoAssistant(FakeAssistant):
             else next(item["text"] for item in content if item["type"] == "input_text")
         )
         lower = text.lower()
-        if "покаж" in lower and "чернов" in lower:
+        if "стриминг" in lower:
+            result = await execute("list_tasks", {"status": "open"}, "demo-stream-tasks")
+            answer = (
+                "## Ответ появляется постепенно\n\n"
+                "**Проверка на синтетических данных:** список задач уже получен инструментом. "
+                "Текст приходит частями, поэтому его можно читать до окончания ответа.\n\n"
+                "1. Сервер сохраняет результат в историю.\n"
+                "2. После перезагрузки браузер подключается к тому же запросу.\n"
+                "3. Повторное подключение не создаёт задачи и не отправляет письма заново.\n\n"
+                "Готово: поток завершится сохранённым ответом "
+                "и настоящими результатами инструментов."
+            )
+        elif "покаж" in lower and "чернов" in lower:
             prior = next(
                 (
                     item["content"]
@@ -107,6 +119,14 @@ class DemoAssistant(FakeAssistant):
                 "до 19 ноября в 09:20 по Москве."
             )
         return answer, history + [{"role": "assistant", "content": answer}]
+
+    async def chat_stream(self, history, execute, now, emit):
+        answer, updated = await self.chat(history, execute, now)
+        await emit({"type": "message_start"})
+        for offset in range(0, len(answer), 12):
+            await emit({"type": "delta", "text": answer[offset : offset + 12]})
+            await asyncio.sleep(0.5 if len(answer) > 300 else 0.15)
+        return answer, updated
 
 
 class DemoSpeech(FakeSpeech):

@@ -226,6 +226,48 @@ async def check_chat_send(c):
         c.outbox.sender = original_sender
 
 
+async def check_stream(c):
+    events = []
+
+    async def collect(event):
+        events.append(event)
+
+    conversation = await c.chat.create_conversation("Synthetic agent streaming")
+    result = await c.chat(
+        conversation["id"],
+        "Создай задачу «Проверить учебный стриминг» без срока. Затем объясни в трёх "
+        "кратких пунктах, как читать потоковый ответ. В ответ включи реальный ID созданной "
+        "задачи из результата инструмента. Это синтетический пример.",
+        new_id(),
+        emit=collect,
+    )
+    if result["status"] != "completed":
+        return {
+            "status": "provider_unavailable"
+            if result["error"] == "provider_unavailable"
+            else "failed",
+            "error": result["error"],
+            "events": len(events),
+        }
+    deltas = [e for e in events if e["type"] == "delta"]
+    tasks = await c.tasks.list()
+    assert deltas and len(tasks) == 1, "Expected streamed text and a persisted task"
+    assert tasks[0]["id"] in result["text"], "Final answer must reference the real task"
+    assert any(e["type"] == "tool_start" for e in events)
+    assert any(e["type"] == "tool_end" and e["ok"] for e in events)
+    saved = await c.chat.messages(conversation["id"])
+    assert saved[-1]["text"] == result["text"]
+    return {
+        "status": "passed",
+        "text_chunks": len(deltas),
+        "tool_progress": True,
+        "persisted_tasks": 1,
+        "grounded_reply": True,
+        "messages_sent": 0,
+        "provider_buffered_single_chunk": len(deltas) == 1,
+    }
+
+
 async def check_mail_read_state(c):
     messages = await c.mail.list_emails(False, 1)
     if not messages:
@@ -289,6 +331,7 @@ async def main(args):
                 ("compose", args.compose, lambda: check_compose(c)),
                 ("outgoing_agent", args.outgoing_agent, lambda: check_outgoing_agent(c)),
                 ("chat_send", args.chat_send, lambda: check_chat_send(c)),
+                ("stream", args.stream, lambda: check_stream(c)),
                 ("speech", args.speech, lambda: check_speech(c, out)),
                 ("ai", args.ai, lambda: check_ai(c)),
             ]:
@@ -338,6 +381,11 @@ if __name__ == "__main__":
         "--outgoing-agent",
         action="store_true",
         help="PAID agent prepares a synthetic outgoing draft; never sends",
+    )
+    parser.add_argument(
+        "--stream",
+        action="store_true",
+        help="PAID real streaming model and tool cycle on synthetic input; no mail sent",
     )
     parser.add_argument(
         "--chat-send",

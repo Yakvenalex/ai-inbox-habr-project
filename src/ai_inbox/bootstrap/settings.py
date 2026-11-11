@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     asr_language: str = "ru"
     tts_model: str = "anyvoice/builtin-7"
     ai_timeout_seconds: float = Field(120, gt=0, le=300)
+    anymodel_trust_env: bool = True
     ai_max_attempts: int = Field(2, ge=1, le=2)
     agent_max_turns: int = Field(8, ge=1, le=12)
     mail_user: str

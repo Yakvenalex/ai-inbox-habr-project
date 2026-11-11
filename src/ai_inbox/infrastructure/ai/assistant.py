@@ -16,12 +16,12 @@ from agents import (
 from openai import AsyncOpenAI
 
 from ai_inbox.application.outgoing_dto import EmailComposition
-from ai_inbox.application.ports import ToolExecutor
+from ai_inbox.application.ports import ChatEventSink, ToolExecutor
 from ai_inbox.domain.errors import AssistantFailure, InvalidInput, ProviderUnavailable
 from ai_inbox.domain.outgoing import validate_content
 
 from .prompts import ASSISTANT, COMPOSE_EMAIL, SUMMARY
-from .retry import provider_request
+from .retry import provider_request, provider_stream
 
 # No prompts, mail or tool arguments go to OpenAI tracing.
 set_tracing_disabled(True)
@@ -125,6 +125,11 @@ class RetryingChatModel(OpenAIChatCompletionsModel):
         parent = super().get_response
         return await provider_request(lambda: parent(*args, **kwargs), self.attempts)
 
+    async def stream_response(self, *args, **kwargs):
+        parent = super().stream_response
+        async for event in provider_stream(lambda: parent(*args, **kwargs), self.attempts):
+            yield event
+
 
 class AnyModelAssistant:
     def __init__(
@@ -166,6 +171,44 @@ class AnyModelAssistant:
         except (MaxTurnsExceeded, ModelBehaviorError) as exc:
             # SDK errors can contain entire prompts. Do not echo or log their bodies.
             raise AssistantFailure("Агент не завершил текстовый ответ.") from exc
+
+    async def chat_stream(
+        self,
+        history: list[dict[str, Any]],
+        execute: ToolExecutor,
+        now: datetime,
+        emit: ChatEventSink,
+    ) -> tuple[str, list[dict[str, Any]]]:
+        agent = Agent(
+            name="AI Inbox",
+            instructions=ASSISTANT.format(now=now.isoformat(), timezone=self.timezone),
+            model=self.model,
+            model_settings=self.options,
+            tools=build_tools(execute),
+        )
+        result = Runner.run_streamed(
+            agent,
+            history,
+            max_turns=self.max_turns,
+            run_config=RunConfig(tracing_disabled=True),
+        )
+        try:
+            async for event in result.stream_events():
+                if event.type != "raw_response_event":
+                    continue
+                if event.data.type == "response.created":
+                    await emit({"type": "message_start"})
+                elif event.data.type == "response.output_text.delta":
+                    await emit({"type": "delta", "text": event.data.delta})
+            answer = str(result.final_output or "").strip()
+            if not answer:
+                raise ProviderUnavailable("AnyModel вернул пустой текстовый ответ.")
+            return answer, result.to_input_list()
+        except (MaxTurnsExceeded, ModelBehaviorError) as exc:
+            raise AssistantFailure("Агент не завершил потоковый ответ.") from exc
+        finally:
+            if not result.is_complete:
+                result.cancel()
 
     async def summarize(self, context: str) -> str:
         agent = Agent(

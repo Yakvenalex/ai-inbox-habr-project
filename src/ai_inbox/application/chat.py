@@ -7,10 +7,10 @@ from collections.abc import Callable
 from typing import Any
 
 from ai_inbox.domain.entities import ChatRun, Conversation, Message
-from ai_inbox.domain.errors import AppError, Conflict, InvalidInput
+from ai_inbox.domain.errors import AppError, AssistantFailure, Conflict, InvalidInput
 
 from .chat_outgoing import confirms_sending, delivery_answer, pending_review
-from .ports import AssistantGateway, Clock, FileStorage, UowFactory
+from .ports import AssistantGateway, ChatEventSink, Clock, FileStorage, UowFactory
 from .tasks import public
 from .tools import AssistantTools
 
@@ -66,6 +66,23 @@ class ChatWithAssistant:
             messages = await uow.messages.list(conversation_id=id)
         return [public(m) for m in sorted(messages, key=lambda m: (m.created_at, m.id))]
 
+    async def active_request(self, id: str) -> dict[str, Any] | None:
+        async with self.uow() as uow:
+            await uow.conversations.get(id)
+            runs = await uow.runs.list(conversation_id=id, status="running")
+            if not runs:
+                return None
+            users = await uow.messages.list(
+                conversation_id=id, request_id=runs[0].request_id, role="user"
+            )
+            if not users:
+                return None
+            return {
+                "text": users[0].text,
+                "image_id": users[0].image_id,
+                "request_id": runs[0].request_id,
+            }
+
     async def _inflate(self, value: Any, image_urls: dict[str, str]) -> Any:
         if isinstance(value, str) and value.startswith("local-image:"):
             id = value.removeprefix("local-image:")
@@ -96,7 +113,13 @@ class ChatWithAssistant:
         return value
 
     async def __call__(
-        self, conversation_id: str, text: str, request_id: str, image_id: str | None = None
+        self,
+        conversation_id: str,
+        text: str,
+        request_id: str,
+        image_id: str | None = None,
+        *,
+        emit: ChatEventSink | None = None,
     ) -> dict[str, Any]:
         if not text.strip() or len(text) > 10000:
             raise InvalidInput("Сообщение должно содержать от 1 до 10000 символов.")
@@ -153,11 +176,38 @@ class ChatWithAssistant:
             tools = self.tools_factory(conversation_id + ":" + request_id, text)
             if confirmed_send:
                 tools.confirmed_email = review
+            partial_text = ""
+
+            async def notify(event: dict[str, Any]) -> None:
+                nonlocal partial_text
+                if event["type"] == "message_start":
+                    partial_text = ""
+                elif event["type"] == "delta":
+                    if len(partial_text) + len(event["text"]) > 100000:
+                        raise AssistantFailure("Поток ответа превысил допустимый размер.")
+                    partial_text += event["text"]
+                if emit is not None:
+                    await emit(event)
+
+            async def execute(name: str, arguments: dict[str, Any], call_id: str) -> dict[str, Any]:
+                await notify({"type": "tool_start", "name": name})
+                result = await tools(name, arguments, call_id)
+                await notify(
+                    {
+                        "type": "tool_end",
+                        "name": name,
+                        "ok": not result.get("error")
+                        and result.get("status") not in {"failed", "unknown"},
+                    }
+                )
+                return result
+
             error = None
             try:
+                await notify({"type": "status", "phase": "thinking"})
                 if confirmed_send:
                     # Confirmation does not need a model to choose whether/what to send.
-                    result = await tools("send_outgoing_email", {}, "confirmed-send")
+                    result = await execute("send_outgoing_email", {}, "confirmed-send")
                     answer, error = delivery_answer(result)
                     conversation.sdk_history = history + [
                         {
@@ -167,7 +217,14 @@ class ChatWithAssistant:
                     ]
                     run.status = "failed" if error else "completed"
                 else:
-                    answer, sdk_history = await self.assistant.chat(inputs, tools, self.clock.now())
+                    if emit is not None:
+                        answer, sdk_history = await self.assistant.chat_stream(
+                            inputs, execute, self.clock.now(), notify
+                        )
+                    else:
+                        answer, sdk_history = await self.assistant.chat(
+                            inputs, tools, self.clock.now()
+                        )
                     conversation.sdk_history = self._deflate(sdk_history, image_urls)
                     run.status = "completed"
             except AppError as exc:
@@ -181,6 +238,8 @@ class ChatWithAssistant:
                 )
             actions = await tools.actions()
             if error:
+                if partial_text.strip():
+                    answer += "\n\nНезавершённый текст модели (ответ прерван):\n\n" + partial_text
                 successful = [a for a in actions if not a["result"].get("error")]
                 prepared = [a for a in successful if a["name"] == "prepare_outgoing_email"]
                 if confirmed_send:

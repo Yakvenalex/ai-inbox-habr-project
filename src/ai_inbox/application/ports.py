@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from types import TracebackType
 from typing import Any, Protocol, TypeVar
@@ -56,6 +56,7 @@ class UnitOfWork(Protocol):
 
 
 UowFactory = Callable[[], UnitOfWork]
+ChatEventSink = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 class Clock(Protocol):
@@ -86,6 +87,13 @@ class ToolExecutor(Protocol):
 class AssistantGateway(Protocol):
     async def chat(
         self, history: list[dict[str, Any]], execute: ToolExecutor, now: datetime
+    ) -> tuple[str, list[dict[str, Any]]]: ...
+    async def chat_stream(
+        self,
+        history: list[dict[str, Any]],
+        execute: ToolExecutor,
+        now: datetime,
+        emit: ChatEventSink,
     ) -> tuple[str, list[dict[str, Any]]]: ...
     async def summarize(self, context: str) -> str: ...
 

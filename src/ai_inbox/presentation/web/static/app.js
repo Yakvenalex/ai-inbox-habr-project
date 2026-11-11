@@ -195,6 +195,7 @@ let selectedEmail = null,
 let unread = true,
   summaryText = '',
   pendingRequest = null,
+  pendingReply = null,
   sending = false;
 const selectedEmails = new Set();
 const mailChanges = new Map();
@@ -617,30 +618,41 @@ function renderMessage(message) {
 async function loadConversation(id) {
   const request = ++conversationLoadRequest;
   closeConversationMenu();
-  let messages = [];
+  let messages = [], active = null;
   if (id) {
     try {
+      active = await api('/conversations/' + encodeURIComponent(id) + '/active-request');
       messages = await api('/conversations/' + encodeURIComponent(id) + '/messages');
     } catch (error) {
       if (request !== conversationLoadRequest) return;
       if (error.status !== 404) throw error;
       id = '';
+      active = null;
       toast('Этот диалог уже удалён. Можно начать новый.');
       conversationItems = await api('/conversations');
     }
   }
   if (request !== conversationLoadRequest) return;
   currentConversation = id;
-  pendingRequest = null;
+  removePendingReply();
+  pendingRequest = active && !messages.some(message => message.role === 'assistant' && message.request_id === active.request_id) ? active : null;
   speech.stopWithin($('#chat-messages'));
   $('#chat-messages').replaceChildren();
-  if (id) messages.forEach(renderMessage);
+  if (id) {
+    messages.forEach(renderMessage);
+    if (pendingRequest && !messages.some(message => message.role === 'user' && message.request_id === pendingRequest.request_id)) renderMessage({role: 'user', ...pendingRequest});
+  }
   else $('#chat-messages').append(node('p', 'text-sm opacity-50 text-center mt-10', 'Новый диалог. Напиши, что нужно сделать.'));
   renderConversationList();
   const url = new URL(location);
   if (id) url.searchParams.set('conversation', id);
   else url.searchParams.delete('conversation');
   history.replaceState(null, '', url);
+  if (pendingRequest) {
+    $('.workspace').classList.remove('chat-hidden');
+    $('.workspace').classList.add('chat-open');
+    void sendMessage();
+  }
 }
 
 function openChat(text) {
@@ -656,6 +668,91 @@ function clearImage() {
   $('#image-preview').classList.add('hidden');
   $('#image-file').value = '';
 }
+const toolProgress = {
+  list_unread_emails: 'Получаю список писем', read_email: 'Читаю письмо',
+  create_task: 'Создаю задачу', list_tasks: 'Проверяю задачи', complete_task: 'Завершаю задачу',
+  create_draft: 'Сохраняю черновик', prepare_outgoing_email: 'Готовлю письмо',
+  review_outgoing_email: 'Показываю актуальный черновик',
+  send_outgoing_email: 'Отправляю подтверждённое письмо', generate_digest: 'Готовлю дайджест'
+};
+function removePendingReply() {
+  if (!pendingReply) return;
+  cancelAnimationFrame(pendingReply.frame);
+  pendingReply.wrap.remove();
+  pendingReply = null;
+}
+function createPendingReply() {
+  removePendingReply();
+  const wrap = node('article', 'py-1');
+  const content = node('div', 'message-text');
+  const status = node('p', 'text-xs opacity-50 mt-3', 'Ассистент обдумывает запрос…');
+  wrap.setAttribute('aria-busy', 'true');
+  wrap.append(node('p', 'text-[10px] font-semibold opacity-40 mb-2', '✦ AI Inbox · ответ формируется'), content, status);
+  $('#chat-messages').append(wrap);
+  pendingReply = {wrap, content, status, text: '', frame: 0};
+  return pendingReply;
+}
+function updatePendingReply(reply, event) {
+  if (event.type === 'snapshot') {
+    reply.text = event.text || '';
+    updatePendingReply(reply, event.progress || {type: 'status'});
+  } else if (event.type === 'delta') {
+    reply.text += event.text;
+    reply.status.textContent = 'Ответ поступает…';
+  }
+  else if (event.type === 'message_start') reply.text = '';
+  else if (event.type === 'tool_start') reply.status.textContent = (toolProgress[event.name] || 'Выполняю инструмент') + '…';
+  else if (event.type === 'tool_end') reply.status.textContent = event.ok ? 'Результат сохранён. Формирую ответ…' : 'Получен отказ или ошибка инструмента. Уточняю ответ…';
+  else if (event.type === 'reconnecting') reply.status.textContent = 'Восстанавливаю соединение с текущим запросом…';
+  else if (event.type === 'status') reply.status.textContent = 'Ассистент обдумывает запрос…';
+  if (reply.frame) return;
+  reply.frame = requestAnimationFrame(() => {
+    reply.frame = 0;
+    if (!reply.wrap.isConnected) return;
+    const messages = $('#chat-messages');
+    const nearBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 100;
+    InboxMarkdown.render(reply.content, reply.text);
+    if (nearBottom) messages.scrollTop = messages.scrollHeight;
+  });
+}
+async function streamReply(id, payload, reply) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const controller = new AbortController();
+    let timer;
+    const touch = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => controller.abort(), 30000);
+    };
+    try {
+      touch();
+      const response = await fetch('/api/v1/conversations/' + encodeURIComponent(id) + '/messages/stream', {
+        method: 'POST', credentials: 'same-origin', signal: controller.signal,
+        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrf()},
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        if (response.status === 401) location.assign('/login');
+        const data = await response.json().catch(() => ({}));
+        const error = new Error(data.error?.message || 'Не удалось открыть поток ответа.');
+        error.terminal = response.status >= 400 && response.status < 500;
+        throw error;
+      }
+      const result = await InboxChatStream.consume(response, event => updatePendingReply(reply, event), touch);
+      if (result.request_id !== payload.request_id) throw new Error('Ответ относится к другому запросу.');
+      return result;
+    } catch (error) {
+      if (error.terminal || attempt === 2) {
+        if (error.name === 'AbortError' || error instanceof TypeError) throw new Error('Не удалось восстановить соединение с потоком. Проверь подключение.');
+        throw error;
+      }
+      updatePendingReply(reply, {type: 'reconnecting'});
+      await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
 async function sendMessage() {
   if (sending) return;
   let text = $('#chat-text').value.trim();
@@ -667,7 +764,7 @@ async function sendMessage() {
   closeConversationMenu();
   $('#conversation-select').disabled = true;
   $('#new-chat').disabled = true;
-  let waiting;
+  let live;
   try {
     if (!currentConversation) {
       const conversation = await post('/conversations', {
@@ -693,9 +790,9 @@ async function sendMessage() {
       $('#chat-text').value = '';
       clearImage();
     }
-    waiting = node('p', 'text-xs opacity-50 animate-pulse', 'Ассистент работает. Вызовы внешнего сервиса могут занять некоторое время…');
-    $('#chat-messages').append(waiting);
-    const result = await post('/conversations/' + currentConversation + '/messages', pendingRequest);
+    live = createPendingReply();
+    const result = await streamReply(currentConversation, pendingRequest, live);
+    removePendingReply();
     renderMessage({
       role: 'assistant',
       ...result
@@ -703,12 +800,15 @@ async function sendMessage() {
     pendingRequest = null;
     send.textContent = '↑';
     if (result.status === 'failed') toast('Ответ не завершён. Проверь сохранённые действия.', true);
-    await loadTasks();
+    await loadTasks().catch(() => toast('Ответ сохранён, но список задач пока не обновился.', true));
   } catch (error) {
+    if (live) {
+      live.wrap.setAttribute('aria-busy', 'false');
+      live.status.textContent = 'Соединение прервано. Нажми ↻ для подключения к тому же запросу.';
+    }
     send.textContent = '↻';
     toast(error.message + ' Повторная отправка использует тот же ID запроса.', true);
   } finally {
-    waiting?.remove();
     sending = false;
     send.disabled = false;
     $('#conversation-select').disabled = false;

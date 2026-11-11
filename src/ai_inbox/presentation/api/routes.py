@@ -1,8 +1,10 @@
+import json
 from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordRequestForm
 
 from .dependencies import Owner, container
@@ -253,7 +255,9 @@ async def create_conversation(data: ConversationCreate, request: Request, owner:
     summary="Удалить диалог со всей историей; созданные сущности остаются",
 )
 async def delete_conversation(id: str, request: Request, owner: Owner):
-    return await container(request).chat.delete_conversation(id)
+    result = await container(request).chat.delete_conversation(id)
+    await container(request).streams.forget(id)
+    return result
 
 
 @router.get(
@@ -278,6 +282,47 @@ async def messages(id: str, request: Request, owner: Owner):
 async def chat(id: str, data: ChatInput, request: Request, owner: Owner):
     return await container(request).chat(
         id, data.text, str(data.request_id), str(data.image_id) if data.image_id else None
+    )
+
+
+@router.get(
+    "/conversations/{id}/active-request",
+    response_model=ChatInput | None,
+    tags=["Диалоги"],
+    summary="Текущий запрос для восстановления потока после reload",
+)
+async def active_request(id: str, request: Request, owner: Owner):
+    return await container(request).streams.active_request(id)
+
+
+@router.post(
+    "/conversations/{id}/messages/stream",
+    response_class=StreamingResponse,
+    tags=["Диалоги"],
+    summary="Поток SSE: текст ответа и статусы инструментов",
+    description="POST с ChatInput и обычной авторизацией/CSRF. Повтор с тем же request_id "
+    "подключается к текущему запросу. snapshot заменяет частичный текст; delta добавляет текст; "
+    "tool_start/tool_end сообщают ход работы; done содержит сохранённый ChatResponse. "
+    "Сбой агента может прийти в done со status=failed. error — ошибка выполнения запроса. "
+    "Обрыв соединения не отменяет работу. После перезапуска возвращается сохранённый "
+    "результат либо interrupted, без повторного выполнения действий.",
+    responses={200: {"content": {"text/event-stream": {"schema": {"type": "string"}}}}},
+)
+async def stream_chat(id: str, data: ChatInput, request: Request, owner: Owner):
+    job = await container(request).streams.open(
+        id, data.text, str(data.request_id), str(data.image_id) if data.image_id else None
+    )
+
+    async def events():
+        async for event in job.subscribe():
+            if event["type"] == "heartbeat":
+                yield ": keepalive\n\n"
+            else:
+                payload = json.dumps(jsonable_encoder(event), ensure_ascii=False)
+                yield f"id: {event['sequence']}\nevent: {event['type']}\ndata: {payload}\n\n"
+
+    return StreamingResponse(
+        events(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"}
     )
 
 

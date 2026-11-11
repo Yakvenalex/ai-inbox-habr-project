@@ -1,9 +1,9 @@
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TypeVar
 
 import httpx
-from openai import APIConnectionError, APIStatusError
+from openai import APIConnectionError, APIError, APIStatusError
 
 from ai_inbox.domain.errors import ProviderUnavailable
 
@@ -35,4 +35,29 @@ async def provider_request[T](operation: Callable[[], Awaitable[T]], attempts: i
                 except ValueError:
                     pass
             await asyncio.sleep(delay)
+    raise AssertionError("attempts must be positive")
+
+
+async def provider_stream[T](
+    operation: Callable[[], AsyncIterator[T]], attempts: int = 2
+) -> AsyncIterator[T]:
+    for attempt in range(attempts):
+        emitted = False
+        try:
+            async for event in operation():
+                emitted = True
+                yield event
+            return
+        except (httpx.HTTPError, APIError) as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if emitted:
+                raise ProviderUnavailable(
+                    "Поток AnyModel прерван. Частичный текст и выполненные действия сохранены."
+                ) from exc
+            if attempt + 1 >= attempts or status is not None and status not in TRANSIENT:
+                raise ProviderUnavailable(
+                    "AnyModel недоступен или отклонил потоковый запрос "
+                    f"(HTTP {status or 'connection'})."
+                ) from exc
+            await asyncio.sleep(1)
     raise AssertionError("attempts must be positive")
