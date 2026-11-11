@@ -22,6 +22,10 @@ from .schemas import (
     DraftCreate,
     DraftPatch,
     DraftResponse,
+    EmailDeleteBatchInput,
+    EmailDeleteBatchResponse,
+    EmailDeleteInput,
+    EmailDeleteResponse,
     EmailReadBatchInput,
     EmailReadBatchResponse,
     EmailReadInput,
@@ -190,6 +194,32 @@ async def email_read_state(id: str, data: EmailReadInput, request: Request, owne
 )
 async def email(id: str, request: Request, owner: Owner):
     return await container(request).mail.read(id)
+
+
+@router.delete(
+    "/emails/{id}",
+    response_model=EmailDeleteResponse,
+    tags=["Почта"],
+    summary="Удалить из INBOX: перенести письмо в корзину на почте",
+    description="Требуется confirmed=true. UID MOVE затрагивает только выбранное письмо. "
+    "Письмо исчезает из INBOX на сервере; восстановление — в почтовом клиенте. "
+    "Повтор при отсутствии UID возвращает already_absent=true; это не доказательство переноса. "
+    "UIDVALIDITY проверяется. Агент не имеет этого инструмента.",
+)
+async def delete_email(id: str, data: EmailDeleteInput, request: Request, owner: Owner):
+    return await container(request).mail.delete(id, data.confirmed)
+
+
+@router.post(
+    "/emails/delete",
+    response_model=EmailDeleteBatchResponse,
+    tags=["Почта"],
+    summary="Перенести выбранные письма в серверную корзину, до 20",
+    description="confirmed=true и список ids. Результат каждого письма отдельно; "
+    "группа не атомарна. Ошибки не скрывают успешные перемещения.",
+)
+async def delete_emails(data: EmailDeleteBatchInput, request: Request, owner: Owner):
+    return await container(request).mail.delete_many(data.ids, data.confirmed)
 
 
 @router.get(

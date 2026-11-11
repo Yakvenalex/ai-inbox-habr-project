@@ -165,6 +165,13 @@ class EmailReadState:
 
 
 @dataclass(frozen=True)
+class EmailDeletion:
+    id: str
+    deleted: bool = True
+    already_absent: bool = False
+
+
+@dataclass(frozen=True)
 class MailboxCounts:
     total: int
     unread: int

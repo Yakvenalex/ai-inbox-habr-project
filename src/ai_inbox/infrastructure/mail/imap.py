@@ -10,7 +10,7 @@ from email import message_from_bytes
 from html.parser import HTMLParser
 from typing import Any
 
-from ai_inbox.domain.entities import Email, EmailReadState, MailboxCounts
+from ai_inbox.domain.entities import Email, EmailDeletion, EmailReadState, MailboxCounts
 from ai_inbox.domain.errors import Conflict, InvalidInput, NotFound, ProviderUnavailable, TooLarge
 
 MAX_MESSAGE_BYTES = 2 * 1024 * 1024
@@ -214,6 +214,89 @@ class ImapMail:
                 raise ProviderUnavailable("IMAP не вернул корректные счётчики.")
             return MailboxCounts(total=int(total[1]), unread=int(unseen[1]))
 
+    @staticmethod
+    def _uid_exists(conn, uid: str) -> bool:
+        # SEARCH gives the command's current set, unlike unsolicited old FETCH flags.
+        status, data = conn.uid("search", None, "UID", uid)
+        if status != "OK" or not data or not isinstance(data[0], bytes):
+            raise ProviderUnavailable("Не удалось проверить наличие письма на сервере.")
+        ids = data[0].split()
+        if any(item != uid.encode() for item in ids):
+            raise ProviderUnavailable("IMAP вернул некорректный результат проверки письма.")
+        return uid.encode() in ids
+
+    @staticmethod
+    def _trash_mailbox(conn) -> bytes:
+        status, folders = conn.list()
+        if status != "OK":
+            raise ProviderUnavailable("Не удалось найти корзину на почтовом сервере.")
+        candidates = set()
+        for folder in folders or []:
+            # imaplib represents a literal mailbox name as (prefix, literal).
+            prefix = folder[0] if isinstance(folder, tuple) else folder
+            if not isinstance(prefix, bytes):
+                continue
+            match = re.fullmatch(rb'\(([^)]*)\) (?:NIL|"(?:[^"\\]|\\.)*") (.+)', prefix)
+            if not match:
+                continue
+            flags = {f.upper() for f in match[1].split()}
+            if b"\\TRASH" not in flags or b"\\NOSELECT" in flags:
+                continue
+            name = match[2]
+            if isinstance(folder, tuple):
+                name = folder[1]
+                if not re.fullmatch(rb"\{\d+\}", match[2]) or not isinstance(name, bytes):
+                    continue
+            elif name.startswith(b'"'):
+                if not re.fullmatch(rb'"(?:[^"\\]|\\.)*"', name):
+                    continue
+                name = re.sub(rb"\\(.)", rb"\1", name[1:-1])
+            elif re.search(rb'[\s(){}"\\]', name):
+                continue
+            if (
+                not name
+                or name.upper() == b"INBOX"
+                or any(c in name for c in (b"\r", b"\n", b"\0"))
+            ):
+                continue
+            candidates.add(name)
+        if len(candidates) != 1:
+            raise Conflict(
+                "Сервер не обозначил единственную корзину (\\Trash). Удаление недоступно."
+            )
+        name = candidates.pop()
+        # Preserve the server's mailbox encoding and quote it as one IMAP argument.
+        return b'"' + name.replace(b"\\", b"\\\\").replace(b'"', b'\\"') + b'"'
+
+    def _delete(self, id: str) -> EmailDeletion:
+        expected, uid = decode_id(id)
+        with self._connect(readonly=False) as conn:
+            if expected != self._validity(conn):
+                raise NotFound("Письмо устарело: UIDVALIDITY изменился. Обнови список.")
+            if not self._uid_exists(conn, uid):
+                # A retry after lost acknowledgement must not move another message.
+                return EmailDeletion(id=id, already_absent=True)
+            status, data = conn.capability()
+            capabilities = b" ".join(data or []).upper().split()
+            if status != "OK" or b"MOVE" not in capabilities:
+                raise Conflict(
+                    "Почтовый сервер не поддерживает безопасное удаление через IMAP MOVE."
+                )
+            trash = self._trash_mailbox(conn)
+            try:
+                status, _ = conn.uid("move", uid, trash)
+            except (imaplib.IMAP4.error, OSError, TimeoutError) as exc:
+                raise ProviderUnavailable(
+                    "Не удалось подтвердить удаление. Обнови входящие и проверь корзину на почте."
+                ) from exc
+            if status != "OK":
+                raise ProviderUnavailable(
+                    "Сервер не подтвердил перенос в корзину. Обнови входящие и проверь корзину."
+                )
+            if not self._uid_exists(conn, uid):
+                return EmailDeletion(id=id)
+            raise Conflict("Письмо осталось во входящих. Удаление не подтверждено сервером.")
+
     async def _run(self, function, *args):
         async with self.slots:
             try:
@@ -236,6 +319,9 @@ class ImapMail:
 
     async def counts(self) -> MailboxCounts:
         return await self._run(self._counts)
+
+    async def delete(self, email_id: str) -> EmailDeletion:
+        return await self._run(self._delete, email_id)
 
     async def close(self):
         await asyncio.to_thread(self.pool.shutdown, wait=True, cancel_futures=True)

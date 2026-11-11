@@ -199,6 +199,8 @@ let unread = true,
   sending = false;
 const selectedEmails = new Set();
 const mailChanges = new Map();
+let listedEmails = [], emailDeletionCandidates = [];
+const trashIcon = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6"/></svg>';
 let mailListRequest = 0,
   emailOpenRequest = 0,
   mailBatchBusy = false;
@@ -232,6 +234,7 @@ function updateMailSelection() {
   $('#mail-selected-count').textContent = selectedEmails.size ? 'Выбрано: ' + selectedEmails.size : 'Письма не выбраны';
   $('#mark-selected-read').disabled = !selectedEmails.size || mailBatchBusy;
   $('#mark-selected-unread').disabled = !selectedEmails.size || mailBatchBusy;
+  $('#delete-selected-emails').disabled = !selectedEmails.size || mailBatchBusy;
 }
 async function loadMail(preserveSelection = false) {
   const request = ++mailListRequest;
@@ -243,6 +246,7 @@ async function loadMail(preserveSelection = false) {
       api('/emails/status').catch(() => null)
     ]);
     if (request !== mailListRequest) return;
+    listedEmails = emails;
     target.replaceChildren();
     if (!preserveSelection) selectedEmails.clear();
     const available = new Set(emails.map(email => email.id));
@@ -254,6 +258,7 @@ async function loadMail(preserveSelection = false) {
     if (!emails.length) return empty(target, unread ? 'Всё прочитано' : 'Писем пока нет', unread ? 'Непрочитанных писем нет. Все письма доступны в соседней вкладке.' : 'Обнови список позже.');
     for (const email of emails) {
       const card = node('article', 'mail-card card bg-base-100 border border-base-300 p-4' + (email.unread ? ' mail-unread' : ''));
+      card.dataset.emailId = email.id;
       const row = node('div', 'flex gap-3 items-start');
       const select = document.createElement('input');
       select.type = 'checkbox';
@@ -274,7 +279,12 @@ async function loadMail(preserveSelection = false) {
       if (email.unread) subject.append(node('span', 'mail-unread-dot shrink-0'));
       subject.append(node('p', 'text-sm truncate', email.subject), node('span', 'text-[10px] opacity-45 shrink-0 ml-auto', email.unread ? 'Новое' : 'Прочитано'));
       content.append(head, subject);
-      row.append(select, content);
+      const remove = button('', 'btn btn-ghost btn-xs btn-square opacity-60 hover:opacity-100 hover:text-error shrink-0', () => askDeleteEmails([email]));
+      remove.innerHTML = trashIcon;
+      remove.setAttribute('aria-label', 'Удалить письмо: ' + email.subject);
+      remove.title = 'Удалить в корзину на почте';
+      select.disabled = content.disabled = remove.disabled = mailBatchBusy;
+      row.append(select, content, remove);
       card.append(row);
       target.append(card);
     }
@@ -290,7 +300,75 @@ function renderEmailReadState() {
   const failed = !$('#email-read-error').classList.contains('hidden');
   $('#email-read-badge').textContent = pending ? 'Сохраняем статус…' : failed ? 'Статус не подтверждён' : selectedEmail.unread ? 'Непрочитано' : 'Прочитано';
   $('#email-read-toggle').textContent = selectedEmail.unread ? 'Отметить прочитанным' : 'Отметить непрочитанным';
-  $('#email-read-toggle').disabled = pending;
+  $('#email-read-toggle').disabled = pending || mailBatchBusy;
+  $('#email-delete').disabled = pending || mailBatchBusy;
+}
+
+function askDeleteEmails(emails) {
+  if (mailBatchBusy || !emails.length) return;
+  emailDeletionCandidates = emails.map(email => ({id: email.id, subject: email.subject}));
+  $('#delete-emails-heading').textContent = emails.length === 1 ? 'Удалить письмо?' : 'Удалить выбранные письма?';
+  $('#delete-emails-subjects').replaceChildren(...emails.map(email => node('li', '', email.subject || 'Без темы')));
+  $('#delete-emails-error').classList.add('hidden');
+  $('#confirm-delete-emails').textContent = 'Переместить в корзину';
+  $('#delete-emails-dialog').showModal();
+  $('#cancel-delete-emails').focus();
+}
+
+async function deleteConfirmedEmails() {
+  if (mailBatchBusy || !emailDeletionCandidates.length) return;
+  mailBatchBusy = true;
+  updateMailSelection();
+  if (selectedEmail) renderEmailReadState();
+  const confirm = $('#confirm-delete-emails');
+  const cancel = $('#cancel-delete-emails');
+  cancel.disabled = true;
+  $('#delete-emails-error').classList.add('hidden');
+  try {
+    await busy(confirm, async () => {
+      const candidates = [...emailDeletionCandidates];
+      // Finish this page's pending read-state writes before moving their UIDs.
+      await Promise.all(candidates.map(email => mailChanges.get(email.id)));
+      let results;
+      if (candidates.length === 1) {
+        const result = await api('/emails/' + encodeURIComponent(candidates[0].id), {method: 'DELETE', body: JSON.stringify({confirmed: true})});
+        results = [{...result, error: null}];
+      } else {
+        ({results} = await post('/emails/delete', {ids: candidates.map(email => email.id), confirmed: true}));
+      }
+      const removed = new Set(results.filter(result => result.deleted && !result.error).map(result => result.id));
+      const failures = results.filter(result => result.error || !result.deleted);
+      for (const id of removed) selectedEmails.delete(id);
+      listedEmails = listedEmails.filter(email => !removed.has(email.id));
+      for (const card of $('#mail-list').querySelectorAll('[data-email-id]')) if (removed.has(card.dataset.emailId)) card.remove();
+      if (removed.has(selectedEmail?.id)) {
+        ++emailOpenRequest;
+        $('#email-dialog').close();
+        selectedEmail = null;
+      }
+      emailDeletionCandidates = candidates.filter(email => !removed.has(email.id));
+      let refreshFailed = false;
+      try {await loadMail(true);} catch {refreshFailed = true; $('#mail-count').textContent = '—';}
+      if (failures.length) {
+        $('#delete-emails-error').textContent = 'Во входящих отсутствуют ' + removed.size + ' из ' + results.length + '. ' + (failures[0].error?.message || 'Удаление не подтверждено.') + ' Повтор затронет только оставшиеся письма.';
+        $('#delete-emails-error').classList.remove('hidden');
+        $('#delete-emails-subjects').replaceChildren(...emailDeletionCandidates.map(email => node('li', '', email.subject)));
+      } else {
+        $('#delete-emails-dialog').close();
+        const absent = results.filter(result => result.already_absent).length;
+        toast((absent ? 'Во входящих уже отсутствовало: ' + absent + '. ' : '') + 'Перемещено в корзину: ' + (results.length - absent) + '.' + (refreshFailed ? ' Список пока не удалось обновить.' : ''), refreshFailed);
+      }
+    });
+  } catch (error) {
+    $('#delete-emails-error').textContent = error.message + ' Удаление не подтверждено. Обнови входящие и проверь корзину на почте.';
+    $('#delete-emails-error').classList.remove('hidden');
+  } finally {
+    mailBatchBusy = false;
+    cancel.disabled = false;
+    updateMailSelection();
+    for (const control of $('#mail-list').querySelectorAll('button, input')) control.disabled = false;
+    if (selectedEmail) renderEmailReadState();
+  }
 }
 async function changeEmailReadState(email, unreadState) {
   const previous = mailChanges.get(email.id) || Promise.resolve();
@@ -854,6 +932,11 @@ function initializeWorkspace() {
   };
   $('#mark-selected-read').onclick = () => guard(() => changeSelectedReadStates(false, $('#mark-selected-read')));
   $('#mark-selected-unread').onclick = () => guard(() => changeSelectedReadStates(true, $('#mark-selected-unread')));
+  $('#delete-selected-emails').onclick = () => askDeleteEmails(listedEmails.filter(email => selectedEmails.has(email.id)));
+  $('#email-delete').onclick = () => {if (selectedEmail) askDeleteEmails([selectedEmail]);};
+  $('#confirm-delete-emails').onclick = () => void deleteConfirmedEmails();
+  $('#cancel-delete-emails').onclick = () => {if (!mailBatchBusy) $('#delete-emails-dialog').close();};
+  $('#delete-emails-dialog').addEventListener('cancel', event => {if (mailBatchBusy) event.preventDefault();});
   $$('[data-unread]').forEach(b => b.onclick = () => guard(async () => {
     unread = b.dataset.unread === 'true';
     $$('[data-unread]').forEach(x => x.classList.toggle('tab-active', x === b));

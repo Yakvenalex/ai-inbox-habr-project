@@ -4,15 +4,44 @@ from typing import Any
 
 from ai_inbox.domain.errors import AppError, InvalidInput
 
-from .ports import AssistantGateway, MailGateway, MailStatusGateway
+from .ports import AssistantGateway, MailDeletionGateway, MailGateway, MailStatusGateway
 from .tasks import public
 
 
 class Mail:
     def __init__(
-        self, gateway: MailGateway, assistant: AssistantGateway, statuses: MailStatusGateway
+        self,
+        gateway: MailGateway,
+        assistant: AssistantGateway,
+        statuses: MailStatusGateway,
+        deletions: MailDeletionGateway,
     ):
         self.gateway, self.assistant, self.statuses = gateway, assistant, statuses
+        self.deletions = deletions
+
+    async def delete(self, id: str, confirmed: bool) -> dict[str, Any]:
+        if confirmed is not True:
+            raise InvalidInput("Подтверди перемещение письма в корзину на почте.")
+        return public(await self.deletions.delete(id))
+
+    async def delete_many(self, ids: list[str], confirmed: bool) -> dict[str, Any]:
+        if confirmed is not True or not ids or len(ids) > 20:
+            raise InvalidInput("Выбери от 1 до 20 писем и подтверди удаление.")
+        results = []
+        # Each MOVE has its own confirmed outcome; a group is not transactional.
+        for id in dict.fromkeys(ids):
+            try:
+                results.append({**await self.delete(id, confirmed), "error": None})
+            except AppError as exc:
+                results.append(
+                    {
+                        "id": id,
+                        "deleted": False,
+                        "already_absent": False,
+                        "error": {"code": exc.code, "message": str(exc)},
+                    }
+                )
+        return {"results": results}
 
     async def list_emails(self, unread: bool = True, limit: int = 20) -> list[dict[str, Any]]:
         return [public(email) for email in await self.gateway.list_emails(unread, limit)]

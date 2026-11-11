@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from ai_inbox.domain.entities import Email, EmailReadState, MailboxCounts
+from ai_inbox.domain.entities import Email, EmailDeletion, EmailReadState, MailboxCounts
 from ai_inbox.domain.errors import NotFound, ProviderUnavailable
 
 
@@ -27,12 +27,16 @@ class FakeMail:
             attachments=[{"filename": "invoice.png", "content_type": "image/png", "size": 1024}],
         )
         self.reads = 0
+        self.deleted = False
+        self.deletions = 0
 
     async def list_emails(self, unread, limit):
-        return [self.email][:limit] if not unread or self.email.unread else []
+        return (
+            [self.email][:limit] if not self.deleted and (not unread or self.email.unread) else []
+        )
 
     async def read(self, email_id):
-        if email_id != self.email.id:
+        if email_id != self.email.id or self.deleted:
             raise NotFound("Письмо не найдено.")
         self.reads += 1
         return self.email
@@ -43,7 +47,18 @@ class FakeMail:
         return EmailReadState(id=email_id, unread=unread)
 
     async def counts(self):
-        return MailboxCounts(total=1, unread=int(self.email.unread))
+        return MailboxCounts(
+            total=int(not self.deleted), unread=int(not self.deleted and self.email.unread)
+        )
+
+    async def delete(self, email_id):
+        if email_id != self.email.id:
+            raise ProviderUnavailable("Не удалось подтвердить удаление.")
+        absent = self.deleted
+        if not absent:
+            self.deletions += 1
+        self.deleted = True
+        return EmailDeletion(id=email_id, already_absent=absent)
 
 
 class FakeSpeech:

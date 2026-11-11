@@ -269,6 +269,30 @@ class EmailReadBatchResponse(Schema):
     results: list[EmailReadBatchItem]
 
 
+class EmailDeleteInput(Schema):
+    confirmed: StrictBool = Field(
+        description="Явное согласие на перенос в серверную корзину", examples=[True]
+    )
+
+
+class EmailDeleteBatchInput(EmailDeleteInput):
+    ids: list[str] = Field(min_length=1, max_length=20)
+
+
+class EmailDeleteResponse(Schema):
+    id: str
+    deleted: bool
+    already_absent: bool
+
+
+class EmailDeleteBatchItem(EmailDeleteResponse):
+    error: ErrorDetail | None
+
+
+class EmailDeleteBatchResponse(Schema):
+    results: list[EmailDeleteBatchItem]
+
+
 class ConversationDeleteResponse(Schema):
     id: str
     deleted: Literal[True]
