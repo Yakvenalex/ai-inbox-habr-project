@@ -114,3 +114,8 @@ body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
   .digest-banner .card-body { flex-wrap: wrap; }
   #summary .card-body { padding: 1.1rem; }
 }
+.ai-compose { background: #242c28; border-color: #3b4740; }
+.ai-compose summary { color: #c4decf; }
+.attachment-row { background: #292929; }
+#compose-form textarea[name="body"] { min-height: 260px; }
+#outbox-list .card { align-items: stretch; height: auto; }

@@ -11,7 +11,7 @@ class LocalStorage:
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
 
     def path(self, filename: str) -> Path:
-        if not re.fullmatch(r"[a-f0-9-]{36}\.(png|jpg|mp3)", filename):
+        if not re.fullmatch(r"[a-f0-9-]{36}\.(png|jpg|mp3|bin)", filename):
             raise NotFound("Файл не найден.")
         path = self.root / filename
         if path.is_symlink() or path.resolve().parent != self.root.resolve():

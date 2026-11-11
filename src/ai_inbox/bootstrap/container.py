@@ -12,11 +12,13 @@ from ai_inbox.application.digests import GenerateDigest
 from ai_inbox.application.drafts import Drafts
 from ai_inbox.application.mail import Mail
 from ai_inbox.application.media import MediaService
+from ai_inbox.application.outbox import Outbox
 from ai_inbox.application.tasks import Tasks
 from ai_inbox.application.tools import AssistantTools
 from ai_inbox.infrastructure.ai.assistant import AnyModelAssistant
 from ai_inbox.infrastructure.auth.jwt import JwtTokens
 from ai_inbox.infrastructure.mail.imap import ImapMail
+from ai_inbox.infrastructure.mail.smtp import SmtpSender
 from ai_inbox.infrastructure.persistence.uow import SqlUnitOfWork, database
 from ai_inbox.infrastructure.scheduling.scheduler import make_scheduler
 from ai_inbox.infrastructure.speech.anymodel import AnyModelSpeech
@@ -31,7 +33,9 @@ class SystemClock:
 
 
 class Container:
-    def __init__(self, settings: Settings, *, mail=None, assistant=None, speech=None, clock=None):
+    def __init__(
+        self, settings: Settings, *, mail=None, assistant=None, speech=None, clock=None, sender=None
+    ):
         self.settings = settings
         self.clock = clock or SystemClock()
         self.engine, sessions = database(settings.database_url)
@@ -94,12 +98,34 @@ class Container:
         self.digests = GenerateDigest(
             self.uow, self.mail, self.tasks, self.assistant, self.clock, settings.app_timezone
         )
+        self.sender = sender or SmtpSender(
+            settings.mail_smtp_host,
+            settings.mail_smtp_port,
+            settings.mail_user,
+            settings.mail_pass.get_secret_value(),
+            settings.mail_timeout_seconds,
+        )
+        self.outbox = Outbox(
+            self.uow,
+            self.sender,
+            self.assistant,
+            self.storage,
+            self.clock,
+            settings.mail_user.rsplit("@", 1)[-1],
+        )
         self.chat = ChatWithAssistant(
             self.uow,
             self.assistant,
             self.storage,
             lambda request_id, user_text: AssistantTools(
-                self.uow, self.tasks, self.drafts, self.mail, self.digests, request_id, user_text
+                self.uow,
+                self.tasks,
+                self.drafts,
+                self.mail,
+                self.digests,
+                self.outbox,
+                request_id,
+                user_text,
             ),
             self.clock,
         )
@@ -120,6 +146,7 @@ class Container:
             await self.close()
             raise RuntimeError("Сначала выполни uv run alembic upgrade head") from None
         await self.chat.recover_interrupted()
+        await self.outbox.recover_interrupted()
         await self.media.cleanup()
         self.scheduler.start()
 
@@ -128,6 +155,8 @@ class Container:
             self.scheduler.shutdown(wait=False)
         if hasattr(self.mail_gateway, "close"):
             await self.mail_gateway.close()
+        if hasattr(self.sender, "close"):
+            await self.sender.close()
         await self.openai.close()
         await self.http.aclose()
         await self.engine.dispose()

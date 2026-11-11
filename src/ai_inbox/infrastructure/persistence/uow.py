@@ -22,7 +22,7 @@ class SqlRepository[T: e.Entity]:
 
     def _entity(self, row: Any) -> T:
         data = {f.name: getattr(row, f.name) for f in fields(self.entity)}
-        for key in ("created_at", "updated_at", "due_at"):
+        for key in ("created_at", "updated_at", "due_at", "sent_at", "accepted_at"):
             if data.get(key):
                 data[key] = datetime.fromisoformat(data[key])
         return self.entity(**data)
@@ -83,6 +83,8 @@ class SqlUnitOfWork:
         self.runs = SqlRepository(self.session, m.RunRow, e.ChatRun)
         self.digests = SqlRepository(self.session, m.DigestRow, e.Digest)
         self.media = SqlRepository(self.session, m.MediaRow, e.Media)
+        self.outbox = SqlRepository(self.session, m.OutgoingRow, e.OutgoingEmail)
+        self.deliveries = SqlRepository(self.session, m.DeliveryRow, e.DeliveryAttempt)
 
     async def __aenter__(self) -> "SqlUnitOfWork":
         return self

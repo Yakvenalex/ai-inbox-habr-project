@@ -14,7 +14,7 @@ from alembic.config import Config
 from ai_inbox.bootstrap.app import create_app
 from ai_inbox.bootstrap.container import Container
 from ai_inbox.bootstrap.settings import ROOT, Settings
-from tests.fakes import FakeAssistant, FakeMail, FakeSpeech
+from tests.fakes import FakeAssistant, FakeMail, FakeSender, FakeSpeech
 
 
 class DemoAssistant(FakeAssistant):
@@ -120,7 +120,13 @@ async def prepare():
 
 def main():
     settings = asyncio.run(prepare())
-    c = Container(settings, mail=FakeMail(), assistant=DemoAssistant(), speech=DemoSpeech())
+    c = Container(
+        settings,
+        mail=FakeMail(),
+        assistant=DemoAssistant(),
+        speech=DemoSpeech(),
+        sender=FakeSender(),
+    )
     uvicorn.run(create_app(settings, c), host="127.0.0.1", port=18764, access_log=False)
 
 

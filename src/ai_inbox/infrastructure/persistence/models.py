@@ -80,7 +80,29 @@ class DigestRow(Record, Base):
 
 class MediaRow(Record, Base):
     __tablename__ = "media"
+    original_name: Mapped[str] = mapped_column(String(255), server_default="")
     kind: Mapped[str] = mapped_column(String(20))
     content_type: Mapped[str] = mapped_column(String(80))
     filename: Mapped[str] = mapped_column(String(80))
     size: Mapped[int] = mapped_column(Integer)
+
+
+class OutgoingRow(Record, Base):
+    __tablename__ = "outbox"
+    recipient: Mapped[str] = mapped_column(String(254))
+    subject: Mapped[str] = mapped_column(String(300))
+    body: Mapped[str] = mapped_column(Text)
+    message_id: Mapped[str] = mapped_column(String(255), unique=True)
+    attachment_ids: Mapped[list[str]] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(20), index=True)
+    error: Mapped[str | None] = mapped_column(Text)
+    sent_at: Mapped[str | None] = mapped_column(String(40))
+
+
+class DeliveryRow(Record, Base):
+    __tablename__ = "delivery_attempts"
+    outbox_id: Mapped[str] = mapped_column(ForeignKey("outbox.id"), index=True)
+    request_id: Mapped[str] = mapped_column(String(36), unique=True)
+    status: Mapped[str] = mapped_column(String(20))
+    error: Mapped[str | None] = mapped_column(Text)
+    accepted_at: Mapped[str | None] = mapped_column(String(40))

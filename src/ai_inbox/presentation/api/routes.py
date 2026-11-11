@@ -7,10 +7,14 @@ from fastapi.security import OAuth2PasswordRequestForm
 
 from .dependencies import Owner, container
 from .schemas import (
+    AttachmentResponse,
     ChatInput,
     ChatResponse,
+    ComposeEmailInput,
+    ComposeEmailResponse,
     ConversationCreate,
     ConversationResponse,
+    DeliveryResponse,
     DigestResponse,
     DraftCreate,
     DraftPatch,
@@ -19,7 +23,11 @@ from .schemas import (
     ErrorResponse,
     MediaResponse,
     MessageResponse,
+    OutgoingInput,
+    OutgoingResponse,
+    OutgoingSummary,
     OwnerResponse,
+    SendEmailInput,
     SpeechInput,
     SummarizeRequest,
     SummaryResponse,
@@ -263,8 +271,17 @@ async def synthesize(data: SpeechInput, request: Request, owner: Owner):
     "/media/{id}",
     response_class=FileResponse,
     tags=["Файлы"],
-    summary="Защищённый медиафайл по ID",
-    responses={200: {"content": {"audio/mpeg": {}, "image/png": {}, "image/jpeg": {}}}},
+    summary="Защищённое медиа или скачивание вложения по ID",
+    responses={
+        200: {
+            "content": {
+                "audio/mpeg": {},
+                "image/png": {},
+                "image/jpeg": {},
+                "application/octet-stream": {},
+            }
+        }
+    },
 )
 async def media(id: str, request: Request, owner: Owner):
     c = container(request)
@@ -272,8 +289,8 @@ async def media(id: str, request: Request, owner: Owner):
     return FileResponse(
         c.storage.path(item["filename"]),
         media_type=item["content_type"],
-        filename=item["filename"],
-        content_disposition_type="inline",
+        filename=item["original_name"] or item["filename"],
+        content_disposition_type="attachment" if item["kind"] == "attachment" else "inline",
     )
 
 
@@ -316,3 +333,83 @@ async def digest(id: str, request: Request, owner: Owner):
 )
 async def digest_audio(id: str, request: Request, owner: Owner):
     return await container(request).media.digest_audio(id)
+
+
+@router.post(
+    "/files/attachments",
+    response_model=AttachmentResponse,
+    status_code=201,
+    tags=["Исходящие"],
+    summary="Загрузить файл для отправки, до 15 МБ",
+)
+async def upload_attachment(file: UploadFile, request: Request, owner: Owner):
+    name, content_type = file.filename or "file", file.content_type or "application/octet-stream"
+    data = await limited_upload(file, request)
+    return await container(request).media.save_attachment(data, name, content_type)
+
+
+@router.post(
+    "/outbox/compose",
+    response_model=ComposeEmailResponse,
+    tags=["Исходящие"],
+    summary="ИИ готовит тему и текст по наброску; письмо не отправляется",
+)
+async def compose_email(data: ComposeEmailInput, request: Request, owner: Owner):
+    return await container(request).outbox.compose(data.outline)
+
+
+@router.get(
+    "/outbox",
+    response_model=list[OutgoingSummary],
+    tags=["Исходящие"],
+    summary="Исходящие черновики и результаты отправок",
+)
+async def outgoing_emails(request: Request, owner: Owner):
+    return await container(request).outbox.list()
+
+
+@router.post(
+    "/outbox",
+    response_model=OutgoingResponse,
+    status_code=201,
+    tags=["Исходящие"],
+    summary="Сохранить исходящий черновик без отправки",
+)
+async def create_outgoing(data: OutgoingInput, request: Request, owner: Owner):
+    return await container(request).outbox.save(
+        data.recipient, data.subject, data.body, [str(id) for id in data.attachment_ids]
+    )
+
+
+@router.get(
+    "/outbox/{id}",
+    response_model=OutgoingResponse,
+    tags=["Исходящие"],
+    summary="Письмо, вложения и состояние отправки",
+)
+async def outgoing_email(id: str, request: Request, owner: Owner):
+    return await container(request).outbox.get(id)
+
+
+@router.patch(
+    "/outbox/{id}",
+    response_model=OutgoingResponse,
+    tags=["Исходящие"],
+    summary="Сохранить полный редактор исходящего черновика",
+)
+async def edit_outgoing(id: str, data: OutgoingInput, request: Request, owner: Owner):
+    return await container(request).outbox.save(
+        data.recipient, data.subject, data.body, [str(id) for id in data.attachment_ids], id=id
+    )
+
+
+@router.post(
+    "/outbox/{id}/send",
+    response_model=DeliveryResponse,
+    tags=["Исходящие"],
+    summary="Подтверждённая отправка через SMTP без автоматического повтора",
+)
+async def send_email(id: str, data: SendEmailInput, request: Request, owner: Owner):
+    return await container(request).outbox.send(
+        id, str(data.request_id), data.confirmed, data.content_token
+    )

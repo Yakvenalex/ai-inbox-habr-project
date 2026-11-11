@@ -109,6 +109,7 @@ class Digest(Entity):
 
 @dataclass(kw_only=True)
 class Media(Entity):
+    original_name: str = ""
     kind: str
     content_type: str
     filename: str
@@ -126,3 +127,24 @@ class Email:
     text: str = ""
     attachments: list[dict[str, Any]] = field(default_factory=list)
     unread: bool = True
+
+
+@dataclass(kw_only=True)
+class OutgoingEmail(Entity):
+    recipient: str
+    subject: str
+    body: str
+    message_id: str
+    attachment_ids: list[str] = field(default_factory=list)
+    status: str = "draft"
+    error: str | None = None
+    sent_at: datetime | None = None
+
+
+@dataclass(kw_only=True)
+class DeliveryAttempt(Entity):
+    outbox_id: str
+    request_id: str
+    status: str = "sending"
+    error: str | None = None
+    accepted_at: datetime | None = None

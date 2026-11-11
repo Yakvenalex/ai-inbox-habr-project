@@ -42,7 +42,7 @@ def create_app(settings: Settings | None = None, container: Container | None = N
         title="AI Inbox",
         version="0.1.0",
         lifespan=lifespan,
-        description="Локальная почта, задачи и мультимодальный агент. Отправки писем нет.",
+        description="Почта, задачи и мультимодальный агент. Ручная отправка с подтверждением.",
         swagger_ui_parameters={"persistAuthorization": False},
     )
     app.state.container = c

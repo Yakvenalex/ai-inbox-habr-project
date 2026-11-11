@@ -162,3 +162,74 @@ class DigestResponse(EntityResponse):
     sources: list[str]
     audio_id: str | None
     error: str | None
+
+
+class AttachmentResponse(MediaResponse):
+    name: str
+    size: int
+
+
+class OutgoingInput(Schema):
+    recipient: str = Field(min_length=3, max_length=254, examples=["reader@example.com"])
+    subject: str = Field(min_length=1, max_length=300, examples=["Учебный счёт — уточнение"])
+    body: str = Field(
+        min_length=1,
+        max_length=20000,
+        examples=["Здравствуйте! Прошу проверить реквизиты учебного счёта."],
+    )
+    attachment_ids: list[UUID] = Field(default_factory=list, max_length=10)
+
+
+class ComposeEmailInput(Schema):
+    outline: str = Field(
+        min_length=1,
+        max_length=10000,
+        examples=["Вежливо попросить уточнить реквизиты учебного счёта, без выдуманных сроков."],
+    )
+
+
+class ComposeEmailResponse(Schema):
+    subject: str
+    body: str
+
+
+class OutgoingSummary(EntityResponse):
+    recipient: str
+    subject: str
+    message_id: str
+    status: Literal["draft", "sending", "sent", "failed", "unknown"]
+    error: str | None
+    sent_at: datetime | None
+    attachment_count: int
+
+
+class OutgoingResponse(EntityResponse):
+    content_token: str
+    recipient: str
+    subject: str
+    body: str
+    message_id: str
+    attachment_ids: list[str]
+    attachments: list[AttachmentResponse]
+    status: Literal["draft", "sending", "sent", "failed", "unknown"]
+    error: str | None
+    sent_at: datetime | None
+
+
+class SendEmailInput(Schema):
+    content_token: str = Field(
+        pattern=r"^[a-f0-9]{64}$", description="Токен содержимого из проверенного OutgoingResponse"
+    )
+    request_id: UUID = Field(
+        description="UUID одной попытки; повтор возвращает прежний результат без SMTP-повтора"
+    )
+    confirmed: Literal[True] = Field(description="Явное подтверждение отправки проверенного письма")
+
+
+class DeliveryResponse(EntityResponse):
+    outbox_id: str
+    request_id: str
+    message_id: str
+    status: Literal["sending", "sent", "failed", "unknown"]
+    error: str | None
+    accepted_at: datetime | None

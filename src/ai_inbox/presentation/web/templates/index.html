@@ -5,13 +5,15 @@
   <a href="/" class="brand flex gap-3 items-center"><span class="brand-icon">✦</span><span class="text-xl font-bold tracking-tight">AI Inbox</span></a>
   <div><p class="section-label mb-3">РАБОЧЕЕ ПРОСТРАНСТВО</p>
     <nav class="menu p-0 gap-1" aria-label="Разделы">
+      <li><button data-view="compose">＋ <span>Написать письмо</span></button></li>
       <li><button data-view="mail" class="active">↙ <span>Входящие</span><span class="badge badge-sm" id="mail-count">—</span></button></li>
       <li><button data-view="tasks">✓ <span>Задачи</span><span class="badge badge-sm" id="task-count">—</span></button></li>
       <li><button data-view="drafts">✎ <span>Черновики</span></button></li>
+      <li><button data-view="outbox">↗ <span>Исходящие</span></button></li>
       <li><button data-view="digests">☷ <span>Дайджесты</span></button></li>
     </nav>
   </div>
-  <div class="mt-auto grid gap-4"><div class="rounded-xl bg-base-200 p-4 text-xs leading-relaxed"><span class="status status-success mr-1"></span> Локальное хранилище<p class="opacity-50 mt-2">Помощник готовит черновики. Письма отправляешь ты.</p></div>
+  <div class="mt-auto grid gap-4"><div class="rounded-xl bg-base-200 p-4 text-xs leading-relaxed"><span class="status status-success mr-1"></span> Локальное хранилище<p class="opacity-50 mt-2">ИИ готовит текст. Отправку подтверждаешь ты.</p></div>
     <a href="/docs" class="link link-hover text-sm opacity-60">Swagger API ↗</a>
     <div class="flex gap-3 items-center border-t border-base-300 pt-4"><div class="avatar placeholder"><div class="bg-base-200 rounded-full w-9 grid place-items-center">Я</div></div><div class="min-w-0 flex-1"><p class="text-sm font-medium truncate">{{ username }}</p><p class="text-xs opacity-40">Владелец</p></div><button id="logout" class="btn btn-ghost btn-sm" title="Выйти" aria-label="Выйти">↪</button></div>
   </div>
@@ -20,7 +22,8 @@
   <header class="flex items-center justify-between border-b border-base-300 bg-base-100 px-7 py-4"><div><span class="text-sm opacity-50">Личный помощник</span><span class="mx-3 opacity-20">/</span><span id="breadcrumb" class="text-sm font-medium">Входящие</span></div><div class="flex items-center gap-3"><span class="badge badge-outline text-xs">{{ timezone }}</span><button id="chat-toggle" class="btn btn-ghost btn-sm">✦ Ассистент</button></div></header>
   <div class="work-content p-5 lg:p-8">
     {% if demo %}<div class="alert alert-warning text-xs mb-5">Демонстрационный режим · синтетические данные и тестовые адаптеры</div>{% endif %}
-    <div class="mobile-nav flex gap-2 mb-5 overflow-x-auto"><button data-view="mail" class="btn btn-sm">Входящие</button><button data-view="tasks" class="btn btn-sm">Задачи</button><button data-view="drafts" class="btn btn-sm">Черновики</button><button data-view="digests" class="btn btn-sm">Дайджесты</button></div>
+    <div class="mobile-nav flex gap-2 mb-5 overflow-x-auto"><button data-view="compose" class="btn btn-sm">Написать</button><button data-view="outbox" class="btn btn-sm">Исходящие</button><button data-view="mail" class="btn btn-sm">Входящие</button><button data-view="tasks" class="btn btn-sm">Задачи</button><button data-view="drafts" class="btn btn-sm">Черновики</button><button data-view="digests" class="btn btn-sm">Дайджесты</button></div>
+    {% include "outbox.html" %}
     <section data-panel="mail">
       <div class="flex items-start justify-between gap-4 mb-7"><div><p class="section-label mb-2">ПОЧТА БЕЗ ШУМА</p><h1 class="text-3xl font-bold tracking-tight">Входящие</h1><p class="text-sm opacity-50 mt-2">Важное — в сводку. Действия — в задачи.</p></div><button id="refresh-mail" class="btn btn-ghost btn-sm">↻ Обновить</button></div>
       <div class="card digest-banner mb-6"><div class="card-body flex-row items-center gap-5 p-5"><div class="text-3xl">✦</div><div class="flex-1"><h2 class="font-semibold">Начни с главного</h2><p class="text-sm opacity-70 mt-1">Сводка просьб и сроков из последних писем.</p></div><button id="summarize" class="btn btn-primary btn-sm">Сделать сводку</button></div></div>
@@ -51,4 +54,5 @@
 <dialog id="transcript-dialog" class="modal"><div class="modal-box"><form method="dialog"><button class="btn btn-sm btn-circle btn-ghost absolute right-3 top-3" aria-label="Закрыть расшифровку">✕</button></form><h2 class="text-xl font-semibold">Проверь расшифровку</h2><p class="text-sm opacity-60 my-4">Исправь неточности. Команда ещё не выполнялась.</p><textarea id="transcript-text" aria-label="Расшифровка голоса" class="textarea w-full min-h-40"></textarea><button id="confirm-transcript" class="btn btn-primary w-full mt-4">Перенести в сообщение</button></div></dialog>
 <div id="notifications" class="toast toast-bottom toast-center z-50" aria-live="assertive"></div>
 <script src="/static/app.js" defer></script>
+<script src="/static/outbox.js" defer></script>
 {% endblock %}

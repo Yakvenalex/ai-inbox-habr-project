@@ -8,7 +8,7 @@ from alembic.config import Config
 from ai_inbox.bootstrap.app import create_app
 from ai_inbox.bootstrap.container import Container
 from ai_inbox.bootstrap.settings import Settings
-from tests.fakes import FakeAssistant, FakeMail, FakeSpeech
+from tests.fakes import FakeAssistant, FakeMail, FakeSender, FakeSpeech
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -36,7 +36,13 @@ async def client(settings):
     config = Config(str(ROOT / "alembic.ini"))
     config.attributes["database_url"] = settings.database_url
     await asyncio.to_thread(command.upgrade, config, "head")
-    c = Container(settings, mail=FakeMail(), assistant=FakeAssistant(), speech=FakeSpeech())
+    c = Container(
+        settings,
+        mail=FakeMail(),
+        assistant=FakeAssistant(),
+        speech=FakeSpeech(),
+        sender=FakeSender(),
+    )
     app = create_app(settings, c)
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(

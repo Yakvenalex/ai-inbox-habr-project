@@ -66,7 +66,11 @@ async function api(path, options = {}) {
   } catch {
     throw new Error('Сервер вернул неожиданный ответ. Проверь соединение.');
   }
-  if (!response.ok) throw new Error(data.error?.message || 'Не удалось выполнить запрос');
+  if (!response.ok) {
+    const error = new Error(data.error?.message || 'Не удалось выполнить запрос');
+    error.status = response.status;
+    throw error;
+  }
   return data;
 }
 const post = (path, data) => api(path, {
@@ -153,6 +157,8 @@ let unread = true,
   sending = false;
 const selectedEmails = new Set();
 const views = {
+  compose: 'Написать письмо',
+  outbox: 'Исходящие',
   mail: 'Входящие',
   tasks: 'Задачи',
   drafts: 'Черновики',
@@ -170,6 +176,9 @@ async function view(name) {
   if (name === 'tasks') await loadTasks();
   if (name === 'drafts') await loadDrafts();
   if (name === 'digests') await loadDigests();
+  document.dispatchEvent(new CustomEvent('inbox:view', {
+    detail: name
+  }));
 }
 async function loadMail() {
   const target = $('#mail-list');
@@ -344,6 +353,11 @@ function renderMessage(message) {
       if (result.id && action.name === 'create_draft') {
         const a = node('a', 'link', 'Открыть черновик');
         a.href = '/drafts/' + result.id;
+        receipt.append(a);
+      }
+      if (result.id && action.name === 'prepare_outgoing_email') {
+        const a = node('a', 'link', 'Открыть письмо для проверки');
+        a.href = '/?view=compose&outgoing=' + encodeURIComponent(result.id);
         receipt.append(a);
       }
       if (result.id && action.name === 'generate_digest') {

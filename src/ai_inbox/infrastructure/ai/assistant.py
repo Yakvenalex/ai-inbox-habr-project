@@ -15,10 +15,12 @@ from agents import (
 )
 from openai import AsyncOpenAI
 
+from ai_inbox.application.outgoing_dto import EmailComposition
 from ai_inbox.application.ports import ToolExecutor
-from ai_inbox.domain.errors import AssistantFailure, ProviderUnavailable
+from ai_inbox.domain.errors import AssistantFailure, InvalidInput, ProviderUnavailable
+from ai_inbox.domain.outgoing import validate_content
 
-from .prompts import ASSISTANT, SUMMARY
+from .prompts import ASSISTANT, COMPOSE_EMAIL, SUMMARY
 from .retry import provider_request
 
 # No prompts, mail or tool arguments go to OpenAI tracing.
@@ -62,6 +64,10 @@ TOOL_DEFINITIONS = {
     "create_draft": (
         "Сохранить локальный черновик ответа, никогда не отправлять.",
         {"email_id": TEXT, "subject": TEXT, "body": TEXT},
+    ),
+    "prepare_outgoing_email": (
+        "Подготовить исходящий черновик с явным адресом пользователя. Без отправки.",
+        {"recipient": TEXT, "subject": TEXT, "body": TEXT},
     ),
     "generate_digest": ("Создать и сохранить дайджест по явной просьбе владельца.", {}),
 }
@@ -176,3 +182,32 @@ class AnyModelAssistant:
             raise
         except (MaxTurnsExceeded, ModelBehaviorError) as exc:
             raise AssistantFailure("Агент не завершил сводку. Попробуй позже.") from exc
+
+    async def compose_email(self, outline: str) -> EmailComposition:
+
+        agent = Agent(
+            name="AI Inbox letter writer",
+            instructions=COMPOSE_EMAIL,
+            model=self.model,
+            model_settings=self.options,
+        )
+        try:
+            result = await Runner.run(
+                agent, outline, max_turns=2, run_config=RunConfig(tracing_disabled=True)
+            )
+            text = str(result.final_output or "").strip()
+            if text.startswith("```") and text.endswith("```"):
+                text = "\n".join(text.splitlines()[1:-1])
+            data = json.loads(text)
+            if (
+                not isinstance(data, dict)
+                or set(data) != {"subject", "body"}
+                or not all(isinstance(v, str) for v in data.values())
+            ):
+                raise ValueError
+            validate_content(data["subject"], data["body"])
+            return EmailComposition(data["subject"], data["body"])
+        except (ValueError, TypeError, InvalidInput, MaxTurnsExceeded, ModelBehaviorError) as exc:
+            raise AssistantFailure(
+                "ИИ не вернул корректные тему и текст. Поля редактора сохранены."
+            ) from exc

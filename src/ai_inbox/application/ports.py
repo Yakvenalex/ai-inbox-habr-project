@@ -7,14 +7,18 @@ from ai_inbox.domain.entities import (
     Action,
     ChatRun,
     Conversation,
+    DeliveryAttempt,
     Digest,
     Draft,
     Email,
     Entity,
     Media,
     Message,
+    OutgoingEmail,
     Task,
 )
+
+from .outgoing_dto import DeliveryResult, EmailComposition, OutgoingMessage
 
 T = TypeVar("T", bound=Entity)
 
@@ -36,6 +40,8 @@ class UnitOfWork(Protocol):
     runs: Repository[ChatRun]
     digests: Repository[Digest]
     media: Repository[Media]
+    outbox: Repository[OutgoingEmail]
+    deliveries: Repository[DeliveryAttempt]
 
     async def __aenter__(self) -> "UnitOfWork": ...
     async def __aexit__(
@@ -87,3 +93,11 @@ class FileStorage(Protocol):
     async def exists(self, filename: str) -> bool: ...
     async def read(self, filename: str) -> bytes: ...
     async def delete(self, filename: str) -> None: ...
+
+
+class MailSender(Protocol):
+    async def send(self, message: OutgoingMessage) -> DeliveryResult: ...
+
+
+class EmailComposerGateway(Protocol):
+    async def compose_email(self, outline: str) -> EmailComposition: ...

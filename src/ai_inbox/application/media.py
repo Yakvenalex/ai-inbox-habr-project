@@ -1,8 +1,10 @@
+import re
 from datetime import timedelta
 from typing import Any
 
 from ai_inbox.domain.entities import Media, new_id
 from ai_inbox.domain.errors import InvalidInput
+from ai_inbox.domain.outgoing import attachment_name
 
 from .ports import Clock, FileStorage, SpeechGateway, UowFactory
 from .speech_text import prepare_speech
@@ -28,13 +30,14 @@ class MediaService:
         )
 
     async def _save(
-        self, data: bytes, kind: str, content_type: str, extension: str
+        self, data: bytes, kind: str, content_type: str, extension: str, original_name: str = ""
     ) -> dict[str, Any]:
         id = new_id()
         filename = await self.storage.write(id, data, extension)
         entity = Media(
             id=id,
             kind=kind,
+            original_name=original_name,
             content_type=content_type,
             filename=filename,
             size=len(data),
@@ -49,6 +52,15 @@ class MediaService:
             await self.storage.delete(filename)
             raise
         return {"file_id": id, "url": f"/api/v1/media/{id}", "content_type": content_type}
+
+    async def save_attachment(self, data: bytes, name: str, content_type: str) -> dict[str, Any]:
+        name = attachment_name(name, len(data))
+        if len(content_type) > 80 or not re.fullmatch(
+            r"[a-zA-Z0-9!#$&^_.+-]+/[a-zA-Z0-9!#$&^_.+-]+", content_type
+        ):
+            content_type = "application/octet-stream"
+        saved = await self._save(data, "attachment", content_type, "bin", name)
+        return {**saved, "name": name, "size": len(data)}
 
     async def transcribe(self, data: bytes, content_type: str) -> dict[str, Any]:
         text = await self.speech.transcribe(data, content_type)

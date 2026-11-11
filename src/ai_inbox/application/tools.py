@@ -11,6 +11,7 @@ from ai_inbox.domain.errors import AppError, Forbidden, InvalidInput
 from .digests import GenerateDigest
 from .drafts import Drafts
 from .mail import Mail
+from .outbox import Outbox
 from .ports import UowFactory
 from .tasks import Tasks, existing_action
 
@@ -32,16 +33,19 @@ class AssistantTools:
         drafts: Drafts,
         mail: Mail,
         digests: GenerateDigest,
+        outbox: Outbox,
         request_id: str,
         user_text: str,
     ):
         self.uow, self.tasks, self.drafts = uow, tasks, drafts
         self.mail, self.digests, self.request_id = mail, digests, request_id
+        self.outbox = outbox
         self.user_text = user_text.lower()
         self.lock = asyncio.Lock()
 
     def _allow_write(self, name: str) -> None:
         patterns = {
+            "prepare_outgoing_email": r"(напиш|состав|подготов|созда).{0,100}(письм|сообщен|ответ)",
             "create_task": r"((созда|добав|постав|запиш|сохрани|извле).{0,100}задач|напомн)",
             "complete_task": r"(заверш|закро|отмет.{0,40}(готов|выполн)|задач.{0,40}выполн)",
             "create_draft": r"(чернов|подготов.{0,30}ответ|ответь|ответ на|состав.{0,30}ответ)",
@@ -111,6 +115,7 @@ class AssistantTools:
             "complete_task": {"task_id"},
             "create_draft": {"email_id", "subject", "body"},
             "generate_digest": set(),
+            "prepare_outgoing_email": {"recipient", "subject", "body"},
         }
         if name not in allowed:
             raise InvalidInput("Неизвестный инструмент.")
@@ -157,6 +162,19 @@ class AssistantTools:
                 text_arg(args, "email_id", 500),
                 text_arg(args, "body"),
                 text_arg(args, "subject", 1000),
+                **metadata,
+            )
+        if name == "prepare_outgoing_email":
+            recipient = text_arg(args, "recipient", 254)
+            if not re.search(
+                r"(?<![\w.+-])" + re.escape(recipient.lower()) + r"(?![\w.-])", self.user_text
+            ):
+                raise InvalidInput("Сначала попроси пользователя явно указать адрес получателя.")
+            return await self.outbox.save(
+                text_arg(args, "recipient", 254),
+                text_arg(args, "subject", 300),
+                text_arg(args, "body"),
+                [],
                 **metadata,
             )
         if name == "generate_digest":

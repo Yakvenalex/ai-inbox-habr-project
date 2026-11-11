@@ -71,3 +71,26 @@ class FakeAssistant:
         if self.fail:
             raise ProviderUnavailable("AnyModel временно недоступен (HTTP 524).")
         return "Учебная сводка: проверить счёт, срок 19 ноября в 09:20."
+
+    async def compose_email(self, outline):
+        from ai_inbox.application.outgoing_dto import EmailComposition
+
+        self.calls += 1
+        if self.fail:
+            raise ProviderUnavailable("AnyModel временно недоступен (HTTP 503).")
+        return EmailComposition(
+            "Уточнение по учебному счёту",
+            "Здравствуйте! Просьба уточнить реквизиты учебного счёта.",
+        )
+
+
+class FakeSender:
+    def __init__(self):
+        from ai_inbox.application.outgoing_dto import DeliveryResult
+
+        self.result = DeliveryResult("sent")
+        self.messages = []
+
+    async def send(self, message):
+        self.messages.append(message)
+        return self.result

@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from agents import Model, ModelResponse, Usage
 from openai.types.responses import (
     ResponseFunctionToolCall,
@@ -134,3 +135,73 @@ async def test_empty_provider_reply_is_not_success():
 
     with pytest.raises(ProviderUnavailable):
         await assistant.chat([{"role": "user", "content": "Привет"}], execute, FakeClock().now())
+
+
+async def test_email_composer_uses_no_tools_and_parses_json():
+    class CompositionModel(ToolCycleModel):
+        async def get_response(self, system_instructions, input, model_settings, tools, **kwargs):
+            assert tools == []
+            assert "не отправляй" in system_instructions.lower()
+            return ModelResponse(
+                output=[
+                    ResponseOutputMessage(
+                        type="message",
+                        id="letter",
+                        role="assistant",
+                        status="completed",
+                        content=[
+                            ResponseOutputText(
+                                type="output_text",
+                                text=json.dumps(
+                                    {
+                                        "subject": "Учебный счёт",
+                                        "body": "Здравствуйте! Уточните реквизиты.",
+                                    },
+                                    ensure_ascii=False,
+                                ),
+                                annotations=[],
+                                logprobs=[],
+                            )
+                        ],
+                    )
+                ],
+                usage=Usage(),
+                response_id="composition",
+            )
+
+    assistant = AnyModelAssistant(None, "fake", 1, 2, "Europe/Moscow", sdk_model=CompositionModel())
+    letter = await assistant.compose_email("Попроси уточнить реквизиты")
+    assert letter.subject == "Учебный счёт" and letter.body.startswith("Здравствуйте!")
+
+
+@pytest.mark.parametrize(
+    "output", ["not json", '["subject", "body"]', '{"subject":"","body":"text"}', '{"subject":"x"}']
+)
+async def test_composer_rejects_malformed_provider_output(output):
+    from ai_inbox.domain.errors import AssistantFailure
+
+    class BadCompositionModel(ToolCycleModel):
+        async def get_response(self, *args, **kwargs):
+            return ModelResponse(
+                output=[
+                    ResponseOutputMessage(
+                        type="message",
+                        id="bad-letter",
+                        role="assistant",
+                        status="completed",
+                        content=[
+                            ResponseOutputText(
+                                type="output_text", text=output, annotations=[], logprobs=[]
+                            )
+                        ],
+                    )
+                ],
+                usage=Usage(),
+                response_id="bad-composition",
+            )
+
+    assistant = AnyModelAssistant(
+        None, "fake", 1, 2, "Europe/Moscow", sdk_model=BadCompositionModel()
+    )
+    with pytest.raises(AssistantFailure):
+        await assistant.compose_email("Уточнить реквизиты счёта")

@@ -125,6 +125,49 @@ async def check_speech(c, out):
     }
 
 
+async def check_smtp(c):
+    await c.sender.check_connection()
+    return {"status": "passed", "tls_login_noop": True, "messages_sent": 0}
+
+
+async def check_compose(c):
+    result = await c.outbox.compose(
+        "Кратко и вежливо попроси уточнить реквизиты учебного счёта ЖЮ-3082. "
+        "Сроков и обещаний нет, не добавляй их. Это синтетический пример."
+    )
+    assert result["subject"] and result["body"], "Empty email composition"
+    assert "3082" in result["subject"] + result["body"], "Document identifier lost"
+    assert not await c.outbox.list(), "Composition must not create or send a letter"
+    return {
+        "status": "passed",
+        "subject_and_body": True,
+        "document_preserved": True,
+        "messages_sent": 0,
+    }
+
+
+async def check_outgoing_agent(c):
+    conversation = await c.chat.create_conversation("Synthetic outgoing draft")
+    result = await c.chat(
+        conversation["id"],
+        "Подготовь исходящее письмо для reader@example.test с просьбой уточнить реквизиты "
+        "учебного счёта ЖЮ-3082. Сохрани черновик, не отправляй. Не придумывай сроки.",
+        new_id(),
+    )
+    if result["status"] != "completed":
+        return {
+            "status": "provider_unavailable"
+            if result["error"] == "provider_unavailable"
+            else "failed",
+            "error": result["error"],
+        }
+    letters = await c.outbox.list()
+    assert len(letters) == 1, "Expected one outgoing draft"
+    assert letters[0]["status"] == "draft" and letters[0]["recipient"] == "reader@example.test"
+    assert letters[0]["id"] in result["text"], "Missing persisted outgoing ID in final answer"
+    return {"status": "passed", "prepared_drafts": 1, "messages_sent": 0, "grounded_reply": True}
+
+
 async def main(args):
     out = ROOT / "data/smoke"
     out.mkdir(parents=True, exist_ok=True)
@@ -145,6 +188,9 @@ async def main(args):
         try:
             for name, enabled, check in [
                 ("mail", args.mail, lambda: check_mail(c)),
+                ("smtp", args.smtp, lambda: check_smtp(c)),
+                ("compose", args.compose, lambda: check_compose(c)),
+                ("outgoing_agent", args.outgoing_agent, lambda: check_outgoing_agent(c)),
                 ("speech", args.speech, lambda: check_speech(c, out)),
                 ("ai", args.ai, lambda: check_ai(c)),
             ]:
@@ -181,5 +227,18 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--speech", action="store_true", help="PAID TTS + WebM ASR on synthetic command"
+    )
+    parser.add_argument(
+        "--smtp", action="store_true", help="TLS login and NOOP only; never sends mail"
+    )
+    parser.add_argument(
+        "--compose",
+        action="store_true",
+        help="PAID subject/body composition from synthetic outline; no sending",
+    )
+    parser.add_argument(
+        "--outgoing-agent",
+        action="store_true",
+        help="PAID agent prepares a synthetic outgoing draft; never sends",
     )
     raise SystemExit(asyncio.run(main(parser.parse_args())))
