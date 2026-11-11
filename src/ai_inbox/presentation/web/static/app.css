@@ -43,7 +43,7 @@ body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
 .menu button:hover { background: #303030; }
 .digest-banner { background: #29312d; border: 1px solid #3b4740; }
 .digest-banner .text-3xl, .assistant-panel h2 .text-primary, #chat-welcome > .text-primary { color: #a7d9c8; }
-.mail-card { cursor: pointer; transition: border-color .15s, background-color .15s; }
+.mail-card { min-width: 0; cursor: pointer; transition: border-color .15s, background-color .15s; }
 .mail-card:hover { border-color: #606060; background: #2c2c2c; }
 .card { box-shadow: none; }
 .btn { box-shadow: none; text-shadow: none; }
@@ -107,7 +107,7 @@ body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
 @media (max-width: 700px) {
   .workspace { display: block; }
   .app-sidebar { display: none; }
-  .mobile-nav { display: flex; }
+  .mobile-nav { display: flex; flex-wrap: wrap; overflow-x: visible; }
   .workspace-main header { padding: 15px; }
   .workspace-main header .badge { display: none; }
   .modal-box { max-height: 90dvh; }
