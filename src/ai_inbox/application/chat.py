@@ -154,11 +154,26 @@ class ChatWithAssistant:
                 logging.getLogger(__name__).error("Chat processing failed: %s", type(exc).__name__)
                 error, answer, run.status = (
                     "internal_error",
-                    "Ошибка обработки ответа. Выполненные действия сохранены ниже.",
+                    "Ошибка обработки ответа.",
                     "failed",
                 )
             actions = await tools.actions()
             if error:
+                successful = [a for a in actions if not a["result"].get("error")]
+                prepared = [a for a in successful if a["name"] == "prepare_outgoing_email"]
+                if prepared:
+                    answer += (
+                        "\n\nЧерновик письма сохранён. Открой его по ссылке ниже, проверь текст "
+                        "и подтверди отправку в редакторе. Письмо ещё не отправлено."
+                    )
+                elif successful:
+                    answer += "\n\nУспешные результаты инструментов сохранены и показаны ниже."
+                elif actions:
+                    answer += (
+                        "\n\nНи одно действие инструмента не выполнено. Причины показаны ниже."
+                    )
+                else:
+                    answer += "\n\nДействия не выполнялись."
                 # Preserve successful receipts even if the provider failed after a mutation.
                 history.append(
                     {

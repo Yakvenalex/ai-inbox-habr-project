@@ -150,8 +150,8 @@ async def check_outgoing_agent(c):
     conversation = await c.chat.create_conversation("Synthetic outgoing draft")
     result = await c.chat(
         conversation["id"],
-        "Подготовь исходящее письмо для reader@example.test с просьбой уточнить реквизиты "
-        "учебного счёта ЖЮ-3082. Сохрани черновик, не отправляй. Не придумывай сроки.",
+        "Отправь на почту reader@example.test просьбу уточнить реквизиты учебного счёта "
+        "ЖЮ-3082, но перепиши вежливо. Это синтетическая проверка. Не придумывай сроки.",
         new_id(),
     )
     if result["status"] != "completed":

@@ -43,9 +43,31 @@ class AssistantTools:
         self.user_text = user_text.lower()
         self.lock = asyncio.Lock()
 
+    def _outgoing_requested(self) -> bool:
+        if re.search(
+            r"(напиш|состав|подготов|созда).{0,100}(письм|сообщен|ответ)",
+            self.user_text,
+            re.DOTALL,
+        ):
+            return True
+        # A request to send can authorize preparing a LOCAL draft only.
+        # Recipient validation still requires the address in the user's own text.
+        for match in re.finditer(
+            r"\b(отправь(?:те)?|отправить|отошли(?:те)?|вышли(?:те)?|"
+            r"пришли(?:те)?|перешли(?:те)?)\b",
+            self.user_text,
+        ):
+            prefix = self.user_text[: match.start()]
+            if not re.search(r"\bне(?:\s+\w+){0,3}\s*$", prefix):
+                return True
+        return False
+
     def _allow_write(self, name: str) -> None:
+        if name == "prepare_outgoing_email" and not self._outgoing_requested():
+            raise Forbidden(
+                "Подготовка письма не запрошена. Попроси написать письмо и укажи адрес получателя."
+            )
         patterns = {
-            "prepare_outgoing_email": r"(напиш|состав|подготов|созда).{0,100}(письм|сообщен|ответ)",
             "create_task": r"((созда|добав|постав|запиш|сохрани|извле).{0,100}задач|напомн)",
             "complete_task": r"(заверш|закро|отмет.{0,40}(готов|выполн)|задач.{0,40}выполн)",
             "create_draft": r"(чернов|подготов.{0,30}ответ|ответь|ответ на|состав.{0,30}ответ)",

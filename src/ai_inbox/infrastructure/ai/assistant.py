@@ -150,18 +150,13 @@ class AnyModelAssistant:
             )
             answer = str(result.final_output or "").strip()
             if not answer:
-                raise ProviderUnavailable(
-                    "AnyModel вернул пустой ответ. Выполненные действия сохранены."
-                )
+                raise ProviderUnavailable("AnyModel вернул пустой текстовый ответ.")
             return answer, result.to_input_list()
         except ProviderUnavailable:
             raise
         except (MaxTurnsExceeded, ModelBehaviorError) as exc:
             # SDK errors can contain entire prompts. Do not echo or log their bodies.
-            raise AssistantFailure(
-                "Агент не завершил ответ. Выполненные действия сохранены; "
-                "продолжи новым сообщением."
-            ) from exc
+            raise AssistantFailure("Агент не завершил текстовый ответ.") from exc
 
     async def summarize(self, context: str) -> str:
         agent = Agent(

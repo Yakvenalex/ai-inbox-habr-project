@@ -29,7 +29,26 @@ class DemoAssistant(FakeAssistant):
             else next(item["text"] for item in content if item["type"] == "input_text")
         )
         lower = text.lower()
-        if "созда" in lower and "задач" in lower:
+        if "почту" in lower and "reader@example.test" in lower:
+            result = await execute(
+                "prepare_outgoing_email",
+                {
+                    "recipient": "reader@example.test",
+                    "subject": "Привет! Как дела?",
+                    "body": "Привет! Как у тебя дела? Буду рад узнать, что нового.",
+                },
+                "demo-outgoing",
+            )
+            if result.get("error"):
+                answer = result["error"]["message"]
+            else:
+                answer = (
+                    "Подготовлен черновик "
+                    + result["id"]
+                    + ". Письмо ещё не отправлено: открой редактор, "
+                    "проверь текст и подтверди отправку."
+                )
+        elif "созда" in lower and "задач" in lower:
             result = await execute(
                 "create_task",
                 {
