@@ -288,7 +288,7 @@ async function loadDrafts() {
   for (const draft of drafts) {
     const card = node('a', 'card bg-base-100 border border-base-300 p-5 mail-card');
     card.href = '/drafts/' + draft.id;
-    card.append(node('h3', 'font-semibold', draft.subject), node('p', 'text-sm opacity-60 mt-3 whitespace-pre-wrap', draft.body.slice(0, 180)), node('p', 'text-xs opacity-40 mt-4', 'Локальный черновик · ' + fmt(draft.updated_at)));
+    card.append(node('h3', 'font-semibold', draft.subject), node('p', 'text-sm opacity-60 mt-3 whitespace-pre-wrap', InboxMarkdown.preview(draft.body, 180)), node('p', 'text-xs opacity-40 mt-4', 'Локальный черновик · ' + fmt(draft.updated_at)));
     target.append(card);
   }
 }
@@ -306,7 +306,7 @@ async function loadDigests() {
       failed: 'Ошибка',
       generating: 'Готовится'
     } [digest.status] || digest.status));
-    card.append(header, node('p', 'text-sm opacity-60 mt-3 whitespace-pre-wrap', (digest.error || digest.text || 'Генерация…').slice(0, 240)));
+    card.append(header, node('p', 'text-sm opacity-60 mt-3 whitespace-pre-wrap', InboxMarkdown.preview(digest.error || digest.text || 'Генерация…')));
     target.append(card);
   }
 }
@@ -321,7 +321,10 @@ async function refreshConversations() {
 function renderMessage(message) {
   $('#chat-welcome')?.remove();
   const wrap = node('article', message.role === 'user' ? 'rounded-xl bg-base-200 p-3' : 'py-1');
-  wrap.append(node('p', 'text-[10px] font-semibold uppercase tracking-wider opacity-40 mb-2', message.role === 'user' ? 'Ты' : '✦ AI Inbox'), node('div', 'message-text', message.text));
+  const content = node('div', 'message-text');
+  if (message.role === 'assistant') InboxMarkdown.render(content, message.text);
+  else content.textContent = message.text;
+  wrap.append(node('p', 'text-[10px] font-semibold uppercase tracking-wider opacity-40 mb-2', message.role === 'user' ? 'Ты' : '✦ AI Inbox'), content);
   if (message.image_id) {
     const img = document.createElement('img');
     img.src = '/api/v1/media/' + message.image_id;
@@ -488,13 +491,23 @@ function initializeWorkspace() {
       limit: 10
     });
     summaryText = result.text;
-    $('#summary-text').textContent = result.text;
+    InboxMarkdown.render($('#summary-text'), result.text);
+    $('#summary-audio').replaceChildren();
     $('#summary').classList.remove('hidden');
     $('#summary-sources').replaceChildren(...result.sources.map(id => {
       const b = button('Письмо ↗', 'btn btn-ghost btn-xs', () => openEmail(id));
       return b;
     }));
   }));
+  $('#close-summary').onclick = () => {
+    $('#summary-audio audio')?.pause();
+    $('#summary').classList.add('hidden');
+    summaryText = '';
+    for (const selector of ['#summary-text', '#summary-sources', '#summary-audio']) {
+      $(selector).replaceChildren();
+    }
+    $('#summarize').focus();
+  };
   $('#speak-summary').onclick = () => guard(() => speak(summaryText, $('#summary-audio'), $('#speak-summary')));
   $('#new-task').onclick = () => taskModal();
   $('#task-status').onchange = () => guard(loadTasks);
@@ -683,7 +696,7 @@ async function initializeDetail() {
       failed: 'Ошибка генерации',
       generating: 'Готовится'
     } [digest.status]) + ' · ' + digest.key;
-    $('#digest-body').textContent = digest.error || digest.text;
+    InboxMarkdown.render($('#digest-body'), digest.error || digest.text);
     $('#digest-sources').replaceChildren(...digest.sources.map(sourceLink));
     $('#digest-speak').disabled = digest.status !== 'ready';
     $('#digest-speak').onclick = () => guard(() => busy($('#digest-speak'), async () => audioPlayer($('#digest-audio'), await post('/digests/' + id + '/audio'))));

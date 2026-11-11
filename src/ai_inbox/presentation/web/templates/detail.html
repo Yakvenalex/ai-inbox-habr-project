@@ -6,7 +6,7 @@
 {% if kind == 'draft' %}
 <form id="edit-draft-form" class="grid gap-5 mt-5"><label class="grid gap-2 text-sm">Тема<input class="input w-full" name="subject" required maxlength="1000"></label><label class="grid gap-2 text-sm">Текст ответа<textarea name="body" class="textarea w-full min-h-80 leading-7" required maxlength="20000"></textarea></label><button class="btn btn-primary justify-self-start">Сохранить изменения</button><span id="saved-state" role="status" class="text-sm opacity-60"></span></form>
 {% else %}
-<p id="digest-body" class="whitespace-pre-wrap leading-8 my-5"></p><div id="digest-sources" class="grid gap-2"></div><button id="digest-speak" class="btn btn-primary justify-self-start mt-5">♫ Озвучить дайджест</button><div id="digest-audio"></div>
+<div id="digest-body" class="markdown-body my-5"></div><div id="digest-sources" class="grid gap-2"></div><button id="digest-speak" class="btn btn-primary justify-self-start mt-5">♫ Озвучить дайджест</button><div id="digest-audio"></div>
 {% endif %}
 </div></div></main><div id="notifications" class="toast toast-bottom toast-center z-50" aria-live="assertive"></div><script src="/static/app.js" defer></script>
 {% endblock %}

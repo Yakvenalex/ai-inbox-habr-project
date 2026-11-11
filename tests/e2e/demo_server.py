@@ -18,6 +18,9 @@ from tests.fakes import FakeAssistant, FakeMail, FakeSpeech
 
 
 class DemoAssistant(FakeAssistant):
+    async def summarize(self, context):
+        return await asyncio.to_thread((ROOT / "tests/fixtures/summary.md").read_text)
+
     async def chat(self, history, execute, now):
         content = history[-1]["content"]
         text = (
