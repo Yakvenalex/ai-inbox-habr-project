@@ -156,6 +156,10 @@ let unread = true,
   pendingRequest = null,
   sending = false;
 const selectedEmails = new Set();
+const mailChanges = new Map();
+let mailListRequest = 0,
+  emailOpenRequest = 0,
+  mailBatchBusy = false;
 const views = {
   compose: 'Написать письмо',
   outbox: 'Исходящие',
@@ -180,48 +184,155 @@ async function view(name) {
     detail: name
   }));
 }
-async function loadMail() {
+
+function updateMailSelection() {
+  $('#mail-selected-count').textContent = selectedEmails.size ? 'Выбрано: ' + selectedEmails.size : 'Письма не выбраны';
+  $('#mark-selected-read').disabled = !selectedEmails.size || mailBatchBusy;
+  $('#mark-selected-unread').disabled = !selectedEmails.size || mailBatchBusy;
+}
+async function loadMail(preserveSelection = false) {
+  const request = ++mailListRequest;
   const target = $('#mail-list');
   target.replaceChildren(node('p', 'text-sm opacity-50', 'Получаем письма…'));
   try {
-    const emails = await api('/emails?unread=' + unread + '&limit=20');
+    const [emails, counts] = await Promise.all([
+      api('/emails?unread=' + unread + '&limit=20'),
+      api('/emails/status').catch(() => null)
+    ]);
+    if (request !== mailListRequest) return;
     target.replaceChildren();
-    selectedEmails.clear();
-    if (unread) $('#mail-count').textContent = emails.length === 20 ? '20+' : emails.length;
-    if (!emails.length) return empty(target, 'Всё спокойно', 'Новых писем нет. Можно заняться задачами.');
+    if (!preserveSelection) selectedEmails.clear();
+    const available = new Set(emails.map(email => email.id));
+    for (const id of selectedEmails)
+      if (!available.has(id)) selectedEmails.delete(id);
+    $('#mail-count').textContent = counts ? counts.unread : '—';
+    $('#mail-count').title = counts ? 'Непрочитанных в INBOX: ' + counts.unread : 'Счётчик временно недоступен';
+    updateMailSelection();
+    if (!emails.length) return empty(target, unread ? 'Всё прочитано' : 'Писем пока нет', unread ? 'Непрочитанных писем нет. Все письма доступны в соседней вкладке.' : 'Обнови список позже.');
     for (const email of emails) {
-      const card = node('article', 'mail-card card bg-base-100 border border-base-300 p-4');
+      const card = node('article', 'mail-card card bg-base-100 border border-base-300 p-4' + (email.unread ? ' mail-unread' : ''));
       const row = node('div', 'flex gap-3 items-start');
       const select = document.createElement('input');
       select.type = 'checkbox';
       select.className = 'checkbox checkbox-sm mt-1';
+      select.checked = selectedEmails.has(email.id);
       select.setAttribute('aria-label', 'Выбрать письмо: ' + email.subject);
-      select.onchange = () => select.checked ? selectedEmails.add(email.id) : selectedEmails.delete(email.id);
+      select.onchange = () => {
+        select.checked ? selectedEmails.add(email.id) : selectedEmails.delete(email.id);
+        updateMailSelection();
+      };
       const content = node('button', 'text-left flex-1 min-w-0');
       content.onclick = () => guard(() => openEmail(email.id));
       const head = node('div', 'flex justify-between gap-2 items-start');
-      head.append(node('span', 'font-semibold text-sm truncate', email.sender), node('span', 'text-[11px] opacity-40 shrink-0', email.date ? new Date(email.date).toLocaleDateString('ru-RU', {
+      head.append(node('span', (email.unread ? 'font-semibold' : 'font-medium opacity-70') + ' text-sm truncate', email.sender), node('span', 'text-[11px] opacity-40 shrink-0', email.date ? new Date(email.date).toLocaleDateString('ru-RU', {
         timeZone: timezone
       }) : ''));
-      content.append(head, node('p', 'text-sm mt-2 truncate', email.subject));
+      const subject = node('div', 'flex items-center gap-2 mt-2');
+      if (email.unread) subject.append(node('span', 'mail-unread-dot shrink-0'));
+      subject.append(node('p', 'text-sm truncate', email.subject), node('span', 'text-[10px] opacity-45 shrink-0 ml-auto', email.unread ? 'Новое' : 'Прочитано'));
+      content.append(head, subject);
       row.append(select, content);
       card.append(row);
       target.append(card);
     }
   } catch (error) {
-    empty(target, 'Почта недоступна', error.message);
+    if (request === mailListRequest) empty(target, 'Почта недоступна', error.message);
     throw error;
   }
 }
+
+function renderEmailReadState() {
+  if (!selectedEmail) return;
+  const pending = mailChanges.has(selectedEmail.id);
+  const failed = !$('#email-read-error').classList.contains('hidden');
+  $('#email-read-badge').textContent = pending ? 'Сохраняем статус…' : failed ? 'Статус не подтверждён' : selectedEmail.unread ? 'Непрочитано' : 'Прочитано';
+  $('#email-read-toggle').textContent = selectedEmail.unread ? 'Отметить прочитанным' : 'Отметить непрочитанным';
+  $('#email-read-toggle').disabled = pending;
+}
+async function changeEmailReadState(email, unreadState) {
+  const previous = mailChanges.get(email.id) || Promise.resolve();
+  const operation = previous.then(async () => {
+    try {
+      const result = await post('/emails/' + encodeURIComponent(email.id) + '/read-state', {
+        unread: unreadState
+      });
+      email.unread = result.unread;
+      if (selectedEmail?.id === email.id) {
+        selectedEmail.unread = result.unread;
+        $('#email-read-error').classList.add('hidden');
+      }
+      try {
+        await loadMail(true);
+      } catch {
+        toast('Статус сохранён, но список не удалось обновить.', true);
+      }
+    } catch (error) {
+      if (selectedEmail?.id === email.id) {
+        $('#email-read-error').textContent = 'Не удалось подтвердить статус в почте. ' + error.message;
+        $('#email-read-error').classList.remove('hidden');
+      }
+    }
+  });
+  mailChanges.set(email.id, operation);
+  if (selectedEmail?.id === email.id) renderEmailReadState();
+  try {
+    await operation;
+  } finally {
+    if (mailChanges.get(email.id) === operation) mailChanges.delete(email.id);
+    if (selectedEmail?.id === email.id) renderEmailReadState();
+  }
+}
 async function openEmail(id) {
+  const request = ++emailOpenRequest;
   const email = await api('/emails/' + encodeURIComponent(id));
+  if (request !== emailOpenRequest) return;
   selectedEmail = email;
   $('#email-subject').textContent = email.subject;
   $('#email-meta').textContent = email.sender + ' · ' + email.date;
   $('#email-body').textContent = email.text || 'Текстовая часть письма отсутствует.';
   $('#email-attachments').textContent = email.attachments.length ? 'Вложения (только метаданные): ' + email.attachments.map(a => a.filename + ' · ' + Math.ceil(a.size / 1024) + ' КБ').join(', ') : '';
+  $('#email-read-error').classList.add('hidden');
+  renderEmailReadState();
   $('#email-dialog').showModal();
+  await changeEmailReadState(email, false);
 }
+async function changeSelectedReadStates(unreadState, trigger) {
+  if (mailBatchBusy || !selectedEmails.size) return;
+  mailBatchBusy = true;
+  updateMailSelection();
+  for (const control of $('#mail-list').querySelectorAll('button, input')) control.disabled = true;
+  try {
+    await busy(trigger, async () => {
+      const {
+        results
+      } = await post('/emails/read-state', {
+        ids: [...selectedEmails],
+        unread: unreadState
+      });
+      const failed = results.filter(result => result.error);
+      if (selectedEmail) {
+        const current = results.find(result => result.id === selectedEmail.id && !result.error);
+        if (current) {
+          selectedEmail.unread = current.unread;
+          renderEmailReadState();
+        }
+      }
+      let refreshFailed = false;
+      try {
+        await loadMail(true);
+      } catch {
+        refreshFailed = true;
+      }
+      const outcome = failed.length ? 'Обновлено ' + (results.length - failed.length) + ' из ' + results.length + '. ' + failed[0].error.message : 'Статус выбранных писем сохранён в почте.';
+      toast(outcome + (refreshFailed ? ' Список пока не удалось обновить.' : ''), !!failed.length || refreshFailed);
+    });
+  } finally {
+    mailBatchBusy = false;
+    for (const control of $('#mail-list').querySelectorAll('button, input')) control.disabled = false;
+    updateMailSelection();
+  }
+}
+
 async function loadTasks() {
   const query = new URLSearchParams();
   if ($('#task-status').value) query.set('status', $('#task-status').value);
@@ -493,6 +604,11 @@ function initializeWorkspace() {
     else workspace.classList.toggle('chat-open');
   };
   $('#refresh-mail').onclick = () => guard(() => busy($('#refresh-mail'), loadMail));
+  $('#email-read-toggle').onclick = () => {
+    if (selectedEmail) changeEmailReadState(selectedEmail, !selectedEmail.unread);
+  };
+  $('#mark-selected-read').onclick = () => guard(() => changeSelectedReadStates(false, $('#mark-selected-read')));
+  $('#mark-selected-unread').onclick = () => guard(() => changeSelectedReadStates(true, $('#mark-selected-unread')));
   $$('[data-unread]').forEach(b => b.onclick = () => guard(async () => {
     unread = b.dataset.unread === 'true';
     $$('[data-unread]').forEach(x => x.classList.toggle('tab-active', x === b));

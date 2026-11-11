@@ -119,3 +119,5 @@ body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
 .attachment-row { background: #292929; }
 #compose-form textarea[name="body"] { min-height: 260px; }
 #outbox-list .card { align-items: stretch; height: auto; }
+.mail-unread { border-left: 3px solid #8ebba7; }
+.mail-unread-dot { width: 6px; height: 6px; border-radius: 50%; background: #a7d9c8; }

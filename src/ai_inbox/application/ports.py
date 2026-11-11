@@ -11,7 +11,9 @@ from ai_inbox.domain.entities import (
     Digest,
     Draft,
     Email,
+    EmailReadState,
     Entity,
+    MailboxCounts,
     Media,
     Message,
     OutgoingEmail,
@@ -68,6 +70,11 @@ class TokenService(Protocol):
 class MailGateway(Protocol):
     async def list_emails(self, unread: bool, limit: int) -> list[Email]: ...
     async def read(self, email_id: str) -> Email: ...
+    async def counts(self) -> MailboxCounts: ...
+
+
+class MailStatusGateway(Protocol):
+    async def set_unread(self, email_id: str, unread: bool) -> EmailReadState: ...
 
 
 class ToolExecutor(Protocol):

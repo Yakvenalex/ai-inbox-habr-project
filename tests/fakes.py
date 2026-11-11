@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from ai_inbox.domain.entities import Email
+from ai_inbox.domain.entities import Email, EmailReadState, MailboxCounts
 from ai_inbox.domain.errors import NotFound, ProviderUnavailable
 
 
@@ -29,13 +29,21 @@ class FakeMail:
         self.reads = 0
 
     async def list_emails(self, unread, limit):
-        return [self.email][:limit]
+        return [self.email][:limit] if not unread or self.email.unread else []
 
     async def read(self, email_id):
         if email_id != self.email.id:
             raise NotFound("Письмо не найдено.")
         self.reads += 1
         return self.email
+
+    async def set_unread(self, email_id, unread):
+        email = await self.read(email_id)
+        email.unread = unread
+        return EmailReadState(id=email_id, unread=unread)
+
+    async def counts(self):
+        return MailboxCounts(total=1, unread=int(self.email.unread))
 
 
 class FakeSpeech:

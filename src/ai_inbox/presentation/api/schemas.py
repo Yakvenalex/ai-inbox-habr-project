@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 
 class Schema(BaseModel):
@@ -233,3 +233,33 @@ class DeliveryResponse(EntityResponse):
     status: Literal["sending", "sent", "failed", "unknown"]
     error: str | None
     accepted_at: datetime | None
+
+
+class EmailReadInput(Schema):
+    unread: StrictBool = Field(
+        examples=[False], description="false — прочитано; true — непрочитано"
+    )
+
+
+class EmailReadResponse(Schema):
+    id: str
+    unread: bool
+
+
+class MailboxCountsResponse(Schema):
+    total: int
+    unread: int
+
+
+class EmailReadBatchInput(EmailReadInput):
+    ids: list[str] = Field(min_length=1, max_length=20)
+
+
+class EmailReadBatchItem(Schema):
+    id: str
+    unread: bool | None
+    error: ErrorDetail | None
+
+
+class EmailReadBatchResponse(Schema):
+    results: list[EmailReadBatchItem]

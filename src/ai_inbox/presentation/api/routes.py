@@ -19,8 +19,13 @@ from .schemas import (
     DraftCreate,
     DraftPatch,
     DraftResponse,
+    EmailReadBatchInput,
+    EmailReadBatchResponse,
+    EmailReadInput,
+    EmailReadResponse,
     EmailResponse,
     ErrorResponse,
+    MailboxCountsResponse,
     MediaResponse,
     MessageResponse,
     OutgoingInput,
@@ -145,10 +150,40 @@ async def summarize(data: SummarizeRequest, request: Request, owner: Owner):
 
 
 @router.get(
+    "/emails/status",
+    response_model=MailboxCountsResponse,
+    tags=["Почта"],
+    summary="Число всех и непрочитанных писем в INBOX",
+)
+async def mailbox_counts(request: Request, owner: Owner):
+    return await container(request).mail.counts()
+
+
+@router.post(
+    "/emails/read-state",
+    response_model=EmailReadBatchResponse,
+    tags=["Почта"],
+    summary="Прочитано/непрочитано для выбранных писем; результат каждого отдельно",
+)
+async def email_read_states(data: EmailReadBatchInput, request: Request, owner: Owner):
+    return await container(request).mail.set_many_unread(data.ids, data.unread)
+
+
+@router.post(
+    "/emails/{id}/read-state",
+    response_model=EmailReadResponse,
+    tags=["Почта"],
+    summary="Сохранить прочитанность письма на почтовом сервере",
+)
+async def email_read_state(id: str, data: EmailReadInput, request: Request, owner: Owner):
+    return await container(request).mail.set_unread(id, data.unread)
+
+
+@router.get(
     "/emails/{id}",
     response_model=EmailResponse,
     tags=["Почта"],
-    summary="Прочитать текст и метаданные вложений",
+    summary="Прочитать текст без изменения флага; для отметки используется POST read-state",
 )
 async def email(id: str, request: Request, owner: Owner):
     return await container(request).mail.read(id)

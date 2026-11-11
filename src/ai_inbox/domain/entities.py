@@ -148,3 +148,15 @@ class DeliveryAttempt(Entity):
     status: str = "sending"
     error: str | None = None
     accepted_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class EmailReadState:
+    id: str
+    unread: bool
+
+
+@dataclass(frozen=True)
+class MailboxCounts:
+    total: int
+    unread: int

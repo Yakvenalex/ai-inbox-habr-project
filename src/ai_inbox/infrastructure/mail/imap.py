@@ -10,8 +10,8 @@ from email import message_from_bytes
 from html.parser import HTMLParser
 from typing import Any
 
-from ai_inbox.domain.entities import Email
-from ai_inbox.domain.errors import InvalidInput, NotFound, ProviderUnavailable, TooLarge
+from ai_inbox.domain.entities import Email, EmailReadState, MailboxCounts
+from ai_inbox.domain.errors import Conflict, InvalidInput, NotFound, ProviderUnavailable, TooLarge
 
 MAX_MESSAGE_BYTES = 2 * 1024 * 1024
 MAX_TEXT = 16000
@@ -79,15 +79,16 @@ class ImapMail:
         self.pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="imap")
         self.slots = asyncio.Semaphore(3)
 
-    def _connect(self):
+    def _connect(self, readonly: bool = True, select_mailbox: bool = True):
         conn = imaplib.IMAP4_SSL(
             self.host, self.port, ssl_context=ssl.create_default_context(), timeout=self.timeout
         )
         try:
             conn.login(self.user, self.password)
-            status, _ = conn.select("INBOX", readonly=True)
-            if status != "OK":
-                raise ProviderUnavailable("Не удалось открыть почтовый ящик.")
+            if select_mailbox:
+                status, _ = conn.select("INBOX", readonly=readonly)
+                if status != "OK":
+                    raise ProviderUnavailable("Не удалось открыть почтовый ящик.")
             return conn
         except Exception:
             conn.logout()
@@ -123,7 +124,7 @@ class ImapMail:
             date=str(msg.get("Date", "")),
             text=body_text(msg) if full else "",
             attachments=attachments,
-            unread=b"\\Seen" not in imaplib.ParseFlags(metadata),
+            unread=not any(flag.lower() == b"\\seen" for flag in imaplib.ParseFlags(metadata)),
         )
 
     def _list(self, unread: bool, limit: int) -> list[Email]:
@@ -171,6 +172,48 @@ class ImapMail:
                     return self._parse(validity, uid, part[1], part[0], True)
             raise NotFound("Письмо не найдено.")
 
+    @staticmethod
+    def _fetch_unread(conn, uid: str) -> bool:
+        status, data = conn.uid("fetch", uid, "(UID FLAGS)")
+        if status != "OK":
+            raise ProviderUnavailable("Не удалось проверить статус письма.")
+        for item in data or []:
+            if isinstance(item, bytes) and re.search(rb"\bUID " + uid.encode() + rb"\b", item):
+                if not re.search(rb"\bFLAGS \(", item):
+                    raise ProviderUnavailable("IMAP не вернул флаги письма.")
+                return not any(flag.lower() == b"\\seen" for flag in imaplib.ParseFlags(item))
+        raise NotFound("Письмо не найдено. Обнови список.")
+
+    def _set_unread(self, id: str, unread: bool) -> EmailReadState:
+        expected, uid = decode_id(id)
+        with self._connect(readonly=False) as conn:
+            if expected != self._validity(conn):
+                raise NotFound("Письмо устарело: UIDVALIDITY изменился. Обнови список.")
+            before = self._fetch_unread(conn, uid)
+            if before != unread:
+                operation = "-FLAGS.SILENT" if unread else "+FLAGS.SILENT"
+                status, _ = conn.uid("store", uid, operation, r"(\Seen)")
+                if status != "OK":
+                    raise ProviderUnavailable("Почтовый сервер не подтвердил изменение статуса.")
+            actual = self._fetch_unread(conn, uid)
+            if actual != unread:
+                raise Conflict(
+                    "Статус письма изменился в другом клиенте или не сохранился. Обнови список."
+                )
+            return EmailReadState(id=id, unread=actual)
+
+    def _counts(self) -> MailboxCounts:
+        with self._connect(select_mailbox=False) as conn:
+            status, data = conn.status("INBOX", "(MESSAGES UNSEEN)")
+            if status != "OK":
+                raise ProviderUnavailable("Не удалось получить счётчики почтового ящика.")
+            raw = b" ".join(item for item in data or [] if isinstance(item, bytes))
+            total = re.search(rb"\bMESSAGES (\d+)", raw, re.I)
+            unseen = re.search(rb"\bUNSEEN (\d+)", raw, re.I)
+            if not total or not unseen or int(unseen[1]) > int(total[1]):
+                raise ProviderUnavailable("IMAP не вернул корректные счётчики.")
+            return MailboxCounts(total=int(total[1]), unread=int(unseen[1]))
+
     async def _run(self, function, *args):
         async with self.slots:
             try:
@@ -187,6 +230,12 @@ class ImapMail:
 
     async def read(self, email_id: str) -> Email:
         return await self._run(self._read, email_id)
+
+    async def set_unread(self, email_id: str, unread: bool) -> EmailReadState:
+        return await self._run(self._set_unread, email_id, unread)
+
+    async def counts(self) -> MailboxCounts:
+        return await self._run(self._counts)
 
     async def close(self):
         await asyncio.to_thread(self.pool.shutdown, wait=True, cancel_futures=True)

@@ -168,6 +168,44 @@ async def check_outgoing_agent(c):
     return {"status": "passed", "prepared_drafts": 1, "messages_sent": 0, "grounded_reply": True}
 
 
+async def check_mail_read_state(c):
+    messages = await c.mail.list_emails(False, 1)
+    if not messages:
+        return {"status": "not_tested", "reason": "empty_mailbox"}
+    id = messages[0]["id"]
+    before = await c.mail_gateway._run(flags, c.mail_gateway, id)
+    original_unread = not any(flag.lower() == b"\\seen" for flag in before)
+    try:
+        state = await c.mail.set_unread(id, not original_unread)
+        after = await c.mail_gateway._run(flags, c.mail_gateway, id)
+        assert state["unread"] == (not original_unread)
+        assert (not any(flag.lower() == b"\\seen" for flag in after)) == state["unread"]
+
+        def other(values):
+            return {f.lower() for f in values if f.lower() not in {b"\\seen", b"\\recent"}}
+
+        assert other(before) == other(after), "Other IMAP flags changed"
+        assert (await c.mail.counts())["total"] >= 1
+    finally:
+        try:
+            await c.mail.set_unread(id, original_unread)
+            restored = await c.mail_gateway._run(flags, c.mail_gateway, id)
+            assert {f.lower() for f in before if f.lower() != b"\\recent"} == {
+                f.lower() for f in restored if f.lower() != b"\\recent"
+            }, "Original flags were not restored"
+        except Exception as exc:
+            raise ProviderUnavailable(
+                "Не удалось подтвердить восстановление статуса письма. Проверь его вручную."
+            ) from exc
+    return {
+        "status": "passed",
+        "changed_messages": 1,
+        "server_confirmed": True,
+        "original_flags_restored": True,
+        "other_flags_preserved": True,
+    }
+
+
 async def main(args):
     out = ROOT / "data/smoke"
     out.mkdir(parents=True, exist_ok=True)
@@ -188,6 +226,7 @@ async def main(args):
         try:
             for name, enabled, check in [
                 ("mail", args.mail, lambda: check_mail(c)),
+                ("mail_read_state", args.mail_read_state, lambda: check_mail_read_state(c)),
                 ("smtp", args.smtp, lambda: check_smtp(c)),
                 ("compose", args.compose, lambda: check_compose(c)),
                 ("outgoing_agent", args.outgoing_agent, lambda: check_outgoing_agent(c)),
@@ -240,5 +279,10 @@ if __name__ == "__main__":
         "--outgoing-agent",
         action="store_true",
         help="PAID agent prepares a synthetic outgoing draft; never sends",
+    )
+    parser.add_argument(
+        "--mail-read-state",
+        action="store_true",
+        help="Toggle Seen on one message, verify, then restore original flags; no mail sent",
     )
     raise SystemExit(asyncio.run(main(parser.parse_args())))

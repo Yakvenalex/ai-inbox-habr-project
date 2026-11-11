@@ -90,7 +90,7 @@ class Container:
         )
         self.storage = LocalStorage(settings.media_dir)
         self.tasks = Tasks(self.uow, self.clock)
-        self.mail = Mail(self.mail_gateway, self.assistant)
+        self.mail = Mail(self.mail_gateway, self.assistant, self.mail_gateway)
         self.drafts = Drafts(self.uow, self.mail_gateway, self.clock)
         self.media = MediaService(
             self.uow, self.storage, self.speech_gateway, self.clock, settings.audio_retention_days
