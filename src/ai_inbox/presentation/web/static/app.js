@@ -333,10 +333,10 @@ function renderMessage(message) {
     const actions = message.actions || [];
     wrap.append(node('p', 'text-[10px] opacity-40 mt-3', actions.length ? 'Подтверждённые результаты инструментов:' : 'Действия инструментами не выполнялись.'));
     for (const action of actions) {
-      const receipt = node('div', 'action-receipt ' + (action.result.error ? 'text-error' : ''));
+      const receipt = node('div', 'action-receipt ' + (action.result.error || action.result.status === 'failed' ? 'text-error' : ''));
       const result = action.result;
       receipt.append(node('strong', '', action.name + (result.error ? ' · не выполнено' : ' · результат получен')));
-      const info = result.error?.message || (result.id ? 'ID: ' + result.id : result.tasks ? 'Задач: ' + result.tasks.length : result.emails ? 'Писем: ' + result.emails.length : result.subject || 'Готово');
+      const info = (typeof result.error === 'string' ? result.error : result.error?.message) || (result.id ? 'ID: ' + result.id : result.tasks ? 'Задач: ' + result.tasks.length : result.emails ? 'Писем: ' + result.emails.length : result.subject || 'Готово');
       receipt.append(node('p', 'source-id mt-1', info));
       if (result.id && action.name === 'create_draft') {
         const a = node('a', 'link', 'Открыть черновик');
@@ -394,6 +394,8 @@ async function sendMessage() {
   sending = true;
   const send = $('#send-chat');
   send.disabled = true;
+  $('#conversation-select').disabled = true;
+  $('#new-chat').disabled = true;
   let waiting;
   try {
     if (!currentConversation) {
@@ -401,6 +403,9 @@ async function sendMessage() {
         title: text.slice(0, 80) || 'Диалог'
       });
       currentConversation = conversation.id;
+      const url = new URL(location);
+      url.searchParams.set('conversation', currentConversation);
+      history.replaceState(null, '', url);
       await refreshConversations();
     }
     if (!pendingRequest) {
@@ -435,6 +440,8 @@ async function sendMessage() {
     waiting?.remove();
     sending = false;
     send.disabled = false;
+    $('#conversation-select').disabled = false;
+    $('#new-chat').disabled = false;
   }
 }
 async function transcribe(file, trigger) {

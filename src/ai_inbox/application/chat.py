@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import logging
 from collections import defaultdict
 from collections.abc import Callable
 from typing import Any
@@ -136,6 +137,13 @@ class ChatWithAssistant:
                 run.status = "completed"
             except AppError as exc:
                 error, answer, run.status = exc.code, str(exc), "failed"
+            except Exception as exc:
+                logging.getLogger(__name__).error("Chat processing failed: %s", type(exc).__name__)
+                error, answer, run.status = (
+                    "internal_error",
+                    "Ошибка обработки ответа. Выполненные действия сохранены ниже.",
+                    "failed",
+                )
             actions = await tools.actions()
             if error:
                 # Preserve successful receipts even if the provider failed after a mutation.
@@ -192,6 +200,21 @@ class ChatWithAssistant:
                     request_id=run.request_id,
                 )
                 await uow.messages.add(message)
+                conversation = await uow.conversations.get(run.conversation_id)
+                user_messages = await uow.messages.list(
+                    conversation_id=run.conversation_id, request_id=run.request_id, role="user"
+                )
+                if user_messages:
+                    conversation.sdk_history.append(
+                        {"role": "user", "content": user_messages[0].text}
+                    )
+                conversation.sdk_history.append(
+                    {
+                        "role": "assistant",
+                        "content": text + "\n" + json.dumps(receipts, ensure_ascii=False),
+                    }
+                )
+                await uow.conversations.save(conversation)
                 run.status = "failed"
                 run.response = {
                     "request_id": run.request_id,

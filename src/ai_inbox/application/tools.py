@@ -65,6 +65,11 @@ class AssistantTools:
             # The semantic key also catches repeated identical calls with a new SDK call ID.
             key = f"{self.request_id}:{name}:{fingerprint}"
             async with self.uow() as uow:
+                prior_calls = await uow.actions.list(
+                    request_id=self.request_id, tool_call_id=call_id
+                )
+                if prior_calls:
+                    return prior_calls[0].result
                 if cached := await existing_action(uow, key):
                     return cached
             try:

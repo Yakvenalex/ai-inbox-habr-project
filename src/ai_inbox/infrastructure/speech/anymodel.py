@@ -60,10 +60,14 @@ class AnyModelSpeech:
                     raise ProviderUnavailable("Для аудио установи ffmpeg.") from exc
                 try:
                     await asyncio.wait_for(process.wait(), 40)
-                except (TimeoutError, asyncio.CancelledError):
+                except asyncio.CancelledError:
                     process.kill()
                     await process.wait()
                     raise
+                except TimeoutError as exc:
+                    process.kill()
+                    await process.wait()
+                    raise InvalidInput("Обработка аудио заняла слишком много времени.") from exc
                 if process.returncode or not output.exists():
                     raise InvalidInput("Не удалось декодировать аудио. Загрузи другой файл.")
                 # Duration after conversion, independent of attacker-controlled file metadata.

@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ai_inbox.domain.errors import (
     AppError,
+    AssistantFailure,
     Conflict,
     Forbidden,
     InvalidInput,
@@ -68,6 +69,7 @@ def create_app(settings: Settings | None = None, container: Container | None = N
             InvalidInput: 422,
             TooLarge: 413,
             ProviderUnavailable: 503,
+            AssistantFailure: 502,
         }.get(type(exc), 400)
         return JSONResponse(
             {"error": {"code": exc.code, "message": str(exc)}},

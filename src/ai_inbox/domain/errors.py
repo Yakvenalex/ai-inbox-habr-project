@@ -28,3 +28,7 @@ class ProviderUnavailable(AppError):
 
 class TooLarge(AppError):
     code = "too_large"
+
+
+class AssistantFailure(AppError):
+    code = "assistant_error"

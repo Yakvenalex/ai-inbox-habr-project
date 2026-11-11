@@ -236,3 +236,75 @@ async def test_upload_body_limit_before_parsing(client, auth):
         content=b"x",
     )
     assert response.status_code == 413
+
+
+async def test_same_call_id_with_changed_arguments_returns_original(client):
+    c = client.container
+    tools = c.chat.tools_factory("request-same-call", "Создай задачу")
+    first = await tools("create_task", TASK, "same-call")
+    second = await tools("create_task", {**TASK, "title": "Повтор с другим названием"}, "same-call")
+    assert second == first
+    assert len(await c.tasks.list()) == 1
+
+
+async def test_restart_preserves_successful_receipts_in_model_history(client, auth):
+    from ai_inbox.domain.entities import ChatRun, Conversation, Message
+
+    c = client.container
+    conversation = Conversation(title="Прерванный диалог")
+    run = ChatRun(conversation_id=conversation.id, request_id=str(uuid4()))
+    async with c.uow() as uow:
+        await uow.conversations.add(conversation)
+        await uow.runs.add(run)
+        await uow.messages.add(
+            Message(
+                conversation_id=conversation.id,
+                role="user",
+                text="Создай задачу",
+                request_id=run.request_id,
+            )
+        )
+        await uow.commit()
+    tools = c.chat.tools_factory(conversation.id + ":" + run.request_id, "Создай задачу")
+    created = await tools("create_task", TASK, "interrupted-call")
+    await c.chat.recover_interrupted()
+    async with c.uow() as uow:
+        saved = await uow.conversations.get(conversation.id)
+        failed = await uow.runs.get(run.id)
+    assert (
+        failed.status == "failed" and failed.response["actions"][0]["result"]["id"] == created["id"]
+    )
+    assert created["id"] in str(saved.sdk_history)
+    assert len(await c.tasks.list()) == 1
+
+
+async def test_chunked_upload_limit_before_multipart_parser(client, auth):
+    async def chunks():
+        for _ in range(23):
+            yield b"x" * 1024 * 1024
+
+    result = await client.post("/api/v1/files/images", headers=auth, content=chunks())
+    assert result.status_code == 413
+
+
+async def test_call_key_has_independent_database_unique_constraint(client):
+    c = client.container
+    async with c.uow() as uow:
+        await uow.actions.add(
+            Action(
+                key="semantic1", request_id="request", tool_call_id="call", name="test", result={}
+            )
+        )
+        await uow.commit()
+    with pytest.raises(Conflict):
+        async with c.uow() as uow:
+            await uow.actions.add(
+                Action(
+                    key="semantic2",
+                    request_id="request",
+                    tool_call_id="call",
+                    name="test",
+                    result={},
+                )
+            )
+            await uow.commit()

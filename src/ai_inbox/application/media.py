@@ -64,7 +64,7 @@ class MediaService:
         async with self.uow() as uow:
             media = await uow.media.get(id)
         # Verify existence without loading an entire MP3 into memory.
-        if not self.storage.path(media.filename).is_file():
+        if not await self.storage.exists(media.filename):
             from ai_inbox.domain.errors import NotFound
 
             raise NotFound("Файл удалён или срок хранения истёк.")
@@ -97,10 +97,13 @@ class MediaService:
 
     async def cleanup(self) -> None:
         threshold = self.clock.now() - timedelta(days=self.retention_days)
-        async with self.uow() as uow:
-            expired = [m for m in await uow.media.list(kind="audio") if m.created_at < threshold]
-        for media in expired:
-            await self.storage.delete(media.filename)
+        while True:
             async with self.uow() as uow:
-                await uow.media.delete(media.id)
-                await uow.commit()
+                expired = await uow.media.list(kind="audio", created_before=threshold)
+            if not expired:
+                break
+            for media in expired:
+                await self.storage.delete(media.filename)
+                async with self.uow() as uow:
+                    await uow.media.delete(media.id)
+                    await uow.commit()

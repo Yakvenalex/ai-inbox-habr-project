@@ -49,6 +49,7 @@ class MessageRow(Record, Base):
 
 class ActionRow(Record, Base):
     __tablename__ = "actions"
+    __table_args__ = (Index("uq_action_request_call", "request_id", "tool_call_id", unique=True),)
     key: Mapped[str] = mapped_column(String(250), unique=True)
     request_id: Mapped[str] = mapped_column(String(100), index=True)
     tool_call_id: Mapped[str] = mapped_column(String(150))

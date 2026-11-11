@@ -9,7 +9,9 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=ROOT / ".env", extra="ignore", case_sensitive=False)
+    model_config = SettingsConfigDict(
+        env_file=ROOT / ".env", extra="ignore", case_sensitive=False, hide_input_in_errors=True
+    )
     app_env: str = "local"
     app_host: str = "127.0.0.1"
     app_port: int = Field(18763, ge=1, le=65535)

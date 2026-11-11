@@ -16,7 +16,7 @@ from alembic.config import Config
 from ai_inbox.bootstrap.container import Container
 from ai_inbox.bootstrap.settings import ROOT, Settings
 from ai_inbox.domain.entities import new_id
-from ai_inbox.domain.errors import AppError
+from ai_inbox.domain.errors import AppError, ProviderUnavailable
 from ai_inbox.infrastructure.mail.imap import decode_id
 
 
@@ -48,28 +48,6 @@ async def check_mail(c):
 
 
 async def check_ai(c):
-    c.assistant.max_turns = 4
-    original = c.assistant.model.get_response
-
-    async def diagnosed(*args, **kwargs):
-        response = await original(*args, **kwargs)
-        diagnostic = []
-        for item in response.output:
-            data = item.model_dump()
-            if data.get("type") == "function_call":
-                try:
-                    keys = list(json.loads(data.get("arguments", "{}")))
-                except ValueError:
-                    keys = ["invalid_json"]
-                diagnostic.append({"type": "function_call", "name": data.get("name"), "keys": keys})
-            else:
-                diagnostic.append(
-                    {"type": data.get("type"), "content_length": len(str(data.get("content", "")))}
-                )
-        print(json.dumps({"model_output_shape": diagnostic}, ensure_ascii=False), flush=True)
-        return response
-
-    c.assistant.model.get_response = diagnosed
     image = (ROOT / "tests/fixtures/invoice.png").read_bytes()
     saved = await c.media.save_image(image, "image/png")
     conversation = await c.chat.create_conversation("Synthetic vision smoke")
@@ -83,29 +61,13 @@ async def check_ai(c):
     )
     if result["status"] != "completed":
         return {
-            "status": "provider_unavailable",
+            "status": "provider_unavailable"
+            if result["error"] == "provider_unavailable"
+            else "failed",
             "error": result["error"],
             "saved_actions": len(result["actions"]),
         }
     tasks = await c.tasks.list()
-    (ROOT / "data/smoke/vision-debug.json").write_text(
-        json.dumps({"response": result, "tasks": tasks}, ensure_ascii=False, indent=2)
-    )
-    print(
-        json.dumps(
-            {
-                "vision_diagnostic": {
-                    "task_count": len(tasks),
-                    "actions": [
-                        {"name": a["name"], "error": a["result"].get("error")}
-                        for a in result["actions"]
-                    ],
-                }
-            },
-            ensure_ascii=False,
-        ),
-        flush=True,
-    )
     assert len(tasks) == 1, "Expected one persisted task"
     task = tasks[0]
     assert task["due_at"] == "2026-11-19T06:20:00+00:00", "Wrong deadline"
@@ -192,7 +154,9 @@ async def main(args):
                     results[name] = await check()
                 except AppError as exc:
                     results[name] = {
-                        "status": "provider_unavailable",
+                        "status": "provider_unavailable"
+                        if isinstance(exc, ProviderUnavailable)
+                        else "failed",
                         "code": exc.code,
                         "message": str(exc),
                     }

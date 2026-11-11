@@ -1,6 +1,8 @@
 from datetime import UTC, datetime
 
 import httpx
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from openai import AsyncOpenAI
 from sqlalchemy import text
 
@@ -20,7 +22,7 @@ from ai_inbox.infrastructure.scheduling.scheduler import make_scheduler
 from ai_inbox.infrastructure.speech.anymodel import AnyModelSpeech
 from ai_inbox.infrastructure.storage.local import LocalStorage
 
-from .settings import Settings
+from .settings import ROOT, Settings
 
 
 class SystemClock:
@@ -106,7 +108,14 @@ class Container:
     async def start(self):
         try:
             async with self.engine.connect() as connection:
-                await connection.execute(text("SELECT version_num FROM alembic_version"))
+                actual = (
+                    await connection.execute(text("SELECT version_num FROM alembic_version"))
+                ).scalar_one()
+                expected = ScriptDirectory.from_config(
+                    Config(str(ROOT / "alembic.ini"))
+                ).get_current_head()
+                if actual != expected:
+                    raise RuntimeError("Database migration is out of date")
         except Exception:
             await self.close()
             raise RuntimeError("Сначала выполни uv run alembic upgrade head") from None

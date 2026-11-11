@@ -36,7 +36,12 @@ class ToolCycleModel(Model):
                     call_id="sdk-call-1",
                     name="create_task",
                     arguments=json.dumps(
-                        {"title": "Учебная задача", "notes": "", "due_at": None, "source": "manual"}
+                        {
+                            "task_title": "Учебная задача",
+                            "notes": "",
+                            "due_at": None,
+                            "source": "manual",
+                        }
                     ),
                 )
             ]
@@ -95,3 +100,37 @@ def test_tools_have_strict_schemas_and_no_send():
         schema = tool.params_json_schema
         assert schema["additionalProperties"] is False
         assert set(schema["required"]) == set(schema["properties"])
+
+
+async def test_empty_provider_reply_is_not_success():
+    import pytest
+
+    from ai_inbox.domain.errors import ProviderUnavailable
+
+    class EmptyModel(ToolCycleModel):
+        async def get_response(self, *args, **kwargs):
+            return ModelResponse(
+                output=[
+                    ResponseOutputMessage(
+                        type="message",
+                        id="empty",
+                        role="assistant",
+                        status="completed",
+                        content=[
+                            ResponseOutputText(
+                                type="output_text", text="", annotations=[], logprobs=[]
+                            )
+                        ],
+                    )
+                ],
+                usage=Usage(),
+                response_id="empty",
+            )
+
+    assistant = AnyModelAssistant(None, "fake", 1, 2, "Europe/Moscow", sdk_model=EmptyModel())
+
+    async def execute(*args):
+        return {}
+
+    with pytest.raises(ProviderUnavailable):
+        await assistant.chat([{"role": "user", "content": "Привет"}], execute, FakeClock().now())

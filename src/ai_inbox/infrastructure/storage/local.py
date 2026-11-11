@@ -25,6 +25,9 @@ class LocalStorage:
         await asyncio.to_thread(path.chmod, 0o600)
         return filename
 
+    async def exists(self, filename: str) -> bool:
+        return await asyncio.to_thread(self.path(filename).is_file)
+
     async def read(self, filename: str) -> bytes:
         try:
             return await asyncio.to_thread(self.path(filename).read_bytes)

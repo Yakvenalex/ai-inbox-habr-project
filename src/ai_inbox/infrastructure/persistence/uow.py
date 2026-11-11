@@ -41,7 +41,10 @@ class SqlRepository[T: e.Entity]:
     async def list(self, **filters: Any) -> list[T]:
         statement = select(self.row)
         for key, value in filters.items():
-            statement = statement.where(getattr(self.row, key) == value)
+            if key == "created_before":
+                statement = statement.where(self.row.created_at < value.isoformat())
+            else:
+                statement = statement.where(getattr(self.row, key) == value)
         statement = statement.order_by(self.row.created_at.desc(), self.row.id).limit(500)
         return [self._entity(row) for row in (await self.session.scalars(statement)).all()]
 
@@ -104,11 +107,13 @@ class SqlUnitOfWork:
 def database(url: str):
     path = url.removeprefix("sqlite+aiosqlite:///")
     if path != ":memory:":
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     engine = create_async_engine(url, connect_args={"timeout": 15})
 
     @event.listens_for(engine.sync_engine, "connect")
     def sqlite_options(conn, _):
+        if path != ":memory:":
+            Path(path).chmod(0o600)
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA journal_mode=WAL")
 

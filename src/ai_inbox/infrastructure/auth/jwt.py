@@ -63,5 +63,5 @@ class JwtTokens:
             if claims["sub"] != self.username or not isinstance(claims["csrf"], str):
                 raise Unauthorized("Войди в приложение снова.")
             return claims
-        except jwt.PyJWTError as exc:
+        except (jwt.PyJWTError, TypeError, ValueError) as exc:
             raise Unauthorized("Войди в приложение снова.") from exc

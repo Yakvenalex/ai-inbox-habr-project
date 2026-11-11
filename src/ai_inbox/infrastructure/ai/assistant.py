@@ -5,6 +5,8 @@ from typing import Any
 from agents import (
     Agent,
     FunctionTool,
+    MaxTurnsExceeded,
+    ModelBehaviorError,
     ModelSettings,
     OpenAIChatCompletionsModel,
     RunConfig,
@@ -14,7 +16,7 @@ from agents import (
 from openai import AsyncOpenAI
 
 from ai_inbox.application.ports import ToolExecutor
-from ai_inbox.domain.errors import ProviderUnavailable
+from ai_inbox.domain.errors import AssistantFailure, ProviderUnavailable
 
 from .prompts import ASSISTANT, SUMMARY
 from .retry import provider_request
@@ -42,7 +44,18 @@ TOOL_DEFINITIONS = {
     "read_email": ("Прочитать письмо по ID без изменения флага прочтения.", {"email_id": TEXT}),
     "create_task": (
         "Создать задачу по явной просьбе. Неясный срок требует уточнения.",
-        {"title": TEXT, "notes": TEXT, "due_at": NULL_TEXT, "source": TEXT},
+        {
+            "task_title": {"type": "string", "description": "Короткое название задачи"},
+            "notes": {"type": "string", "description": "Детали, номера и суммы с копейками"},
+            "due_at": {
+                "type": ["string", "null"],
+                "description": "Точный ISO 8601 срок с часовым поясом или null",
+            },
+            "source": {
+                "type": "string",
+                "description": "Источник: image:<ID>, email:<ID> или manual",
+            },
+        },
     ),
     "list_tasks": ("Список задач: open, completed или null для всех.", {"status": NULL_TEXT}),
     "complete_task": ("Завершить задачу по ID по явной просьбе владельца.", {"task_id": TEXT}),
@@ -62,6 +75,9 @@ def build_tools(execute: ToolExecutor) -> list[FunctionTool]:
             async def invoke(context, raw):
                 try:
                     args = json.loads(raw)
+                    # Keep provider-facing schema names separate from domain/API field names.
+                    if tool_name == "create_task" and "task_title" in args:
+                        args["title"] = args.pop("task_title")
                     result = await execute(tool_name, args, context.tool_call_id)
                 except (ValueError, TypeError):
                     result = {
@@ -134,9 +150,9 @@ class AnyModelAssistant:
             return answer, result.to_input_list()
         except ProviderUnavailable:
             raise
-        except Exception as exc:
+        except (MaxTurnsExceeded, ModelBehaviorError) as exc:
             # SDK errors can contain entire prompts. Do not echo or log their bodies.
-            raise ProviderUnavailable(
+            raise AssistantFailure(
                 "Агент не завершил ответ. Выполненные действия сохранены; "
                 "продолжи новым сообщением."
             ) from exc
@@ -158,5 +174,5 @@ class AnyModelAssistant:
             return answer
         except ProviderUnavailable:
             raise
-        except Exception as exc:
-            raise ProviderUnavailable("AnyModel не завершил сводку. Попробуй позже.") from exc
+        except (MaxTurnsExceeded, ModelBehaviorError) as exc:
+            raise AssistantFailure("Агент не завершил сводку. Попробуй позже.") from exc

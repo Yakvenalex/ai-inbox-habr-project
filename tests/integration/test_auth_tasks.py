@@ -101,3 +101,60 @@ async def test_token_endpoint_never_sets_cookie(client):
     assert (
         await client.post("/api/v1/auth/token", data={"username": "demo", "password": "wrong"})
     ).status_code == 401
+
+
+async def test_tampered_malformed_and_expired_cookie(client, settings, auth):
+    good = (
+        await client.post(
+            "/api/v1/auth/token", data={"username": "demo", "password": "test-owner-password"}
+        )
+    ).json()["access_token"]
+    assert (
+        await client.get("/api/v1/auth/me", headers={"Authorization": "Bearer " + good + "tamper"})
+    ).status_code == 401
+    claims = jwt.decode(
+        good,
+        settings.jwt_secret_key.get_secret_value(),
+        algorithms=["HS256"],
+        audience=settings.jwt_audience,
+    )
+    claims["exp"] = None
+    malformed = jwt.encode(claims, settings.jwt_secret_key.get_secret_value(), algorithm="HS256")
+    assert (
+        await client.get("/api/v1/auth/me", headers={"Authorization": "Bearer " + malformed})
+    ).status_code == 401
+    claims["exp"] = datetime.now(UTC) - timedelta(minutes=1)
+    expired = jwt.encode(claims, settings.jwt_secret_key.get_secret_value(), algorithm="HS256")
+    client.cookies.set(settings.auth_cookie_name, expired)
+    assert (await client.get("/api/v1/auth/me")).status_code == 401
+    assert (await client.get("/")).status_code == 303
+    assert (await client.get("/api/v1/auth/me", headers=auth)).status_code == 200
+
+
+async def test_csrf_wrong_origin_and_logout_does_not_revoke_bearer(client, auth):
+    origin = str(client.base_url).rstrip("/")
+    await client.post(
+        "/auth/login",
+        headers={"Origin": origin},
+        data={"username": "demo", "password": "test-owner-password"},
+    )
+    csrf = client.cookies["ai_inbox_csrf"]
+    assert (
+        await client.post(
+            "/api/v1/tasks",
+            headers={"Origin": "https://evil.test", "X-CSRF-Token": csrf},
+            json={"title": "Не создавать"},
+        )
+    ).status_code == 403
+    assert (
+        await client.post(
+            "/api/v1/tasks",
+            headers={"Origin": origin, "X-CSRF-Token": "incorrect"},
+            json={"title": "Не создавать"},
+        )
+    ).status_code == 403
+    response = await client.post("/auth/logout", headers={"Origin": origin, "X-CSRF-Token": csrf})
+    assert response.status_code == 303 and all(
+        "Max-Age=0" in h for h in response.headers.get_list("set-cookie")
+    )
+    assert (await client.get("/api/v1/auth/me", headers=auth)).status_code == 200

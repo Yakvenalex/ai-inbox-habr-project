@@ -19,7 +19,9 @@ async def online():
     if url != "sqlite+aiosqlite:///:memory:":
         from pathlib import Path
 
-        Path(url.removeprefix("sqlite+aiosqlite:///")).parent.mkdir(parents=True, exist_ok=True)
+        Path(url.removeprefix("sqlite+aiosqlite:///")).parent.mkdir(
+            parents=True, exist_ok=True, mode=0o700
+        )
     engine = create_async_engine(url)
     async with engine.connect() as connection:
         await connection.run_sync(run)
