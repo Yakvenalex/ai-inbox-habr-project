@@ -111,6 +111,8 @@ class DemoAssistant(FakeAssistant):
 
 class DemoSpeech(FakeSpeech):
     async def synthesize(self, text):
+        # Leave time to test Stop while generation is pending, without a paid call.
+        await asyncio.sleep(1)
         return await asyncio.to_thread((ROOT / "data/demo/tone.mp3").read_bytes)
 
 
@@ -128,7 +130,9 @@ async def prepare():
             "-f",
             "lavfi",
             "-i",
-            "sine=frequency=440:duration=1",
+            "sine=frequency=440:duration=12",
+            "-af",
+            "volume=0.02",
             "-c:a",
             "libmp3lame",
             str(folder / "tone.mp3"),

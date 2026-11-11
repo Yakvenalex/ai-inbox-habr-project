@@ -85,21 +85,62 @@ function empty(target, title, description) {
   target.append(card);
 }
 
-function audioPlayer(target, result) {
-  target.replaceChildren();
-  const audio = document.createElement('audio');
-  audio.controls = true;
-  audio.src = result.url;
-  audio.className = 'w-full my-3';
-  const link = node('a', 'link text-xs', 'Скачать MP3');
-  link.href = result.url;
-  link.download = result.file_id + '.mp3';
-  target.append(audio, link);
-}
-async function speak(text, target, b) {
-  await busy(b, async () => audioPlayer(target, await post('/speech/synthesis', {
-    text
-  })));
+const speechOwners = new WeakMap();
+const speech = InboxSpeech.create({
+  createAudio(owner, result) {
+    const audio = document.createElement('audio');
+    audio.hidden = true;
+    audio.preload = 'auto';
+    audio.src = result.url;
+    owner.target.append(audio);
+    return audio;
+  },
+  onState(owner, state) {
+    const b = owner.button;
+    b.setAttribute('aria-pressed', String(state !== 'idle'));
+    b.setAttribute('aria-busy', String(state === 'loading'));
+    if (state === 'idle') {
+      b.replaceChildren(...owner.contents);
+      b.title = owner.title;
+      b.setAttribute('aria-label', owner.label);
+    } else {
+      const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      icon.setAttribute('viewBox', '0 0 16 16');
+      icon.setAttribute('width', '12');
+      icon.setAttribute('height', '12');
+      icon.setAttribute('aria-hidden', 'true');
+      const square = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      for (const [key, value] of Object.entries({x: '2', y: '2', width: '12', height: '12', rx: '1.5', fill: 'currentColor'})) square.setAttribute(key, value);
+      icon.append(square);
+      b.replaceChildren(icon, node('span', '', state === 'loading' ? 'Готовлю голос…' : 'Стоп'));
+      b.title = state === 'loading' ? 'Остановить ожидание озвучки' : 'Остановить озвучку';
+      b.setAttribute('aria-label', 'Остановить озвучку');
+    }
+  },
+  onReady(owner, result) {
+    owner.target.replaceChildren();
+    const link = node('a', 'link text-xs', 'Скачать MP3');
+    link.href = result.url;
+    link.download = result.file_id + '.mp3';
+    owner.target.append(link);
+  },
+  onError(error) {
+    toast(error.message || 'Не удалось озвучить текст.', true);
+  }
+});
+window.addEventListener('pagehide', () => speech.stop());
+
+function speak(text, target, b, request = () => post('/speech/synthesis', {text}), cacheKey = text) {
+  let owner = speechOwners.get(b);
+  if (!owner) {
+    owner = {button: b, target, contents: [...b.childNodes], title: b.title, label: b.getAttribute('aria-label') || b.textContent};
+    speechOwners.set(b, owner);
+  }
+  if (owner.key !== cacheKey) {
+    target.replaceChildren();
+    owner.key = cacheKey;
+  }
+  return speech.toggle(owner, cacheKey, request);
 }
 
 function sourceLink(source) {
@@ -169,6 +210,7 @@ const views = {
   digests: 'Дайджесты'
 };
 async function view(name) {
+  speech.stop();
   if (!views[name]) name = 'mail';
   $$('[data-panel]').forEach(el => el.hidden = el.dataset.panel !== name);
   $$('[data-view]').forEach(el => el.classList.toggle('active', el.dataset.view === name));
@@ -590,7 +632,7 @@ async function loadConversation(id) {
   if (request !== conversationLoadRequest) return;
   currentConversation = id;
   pendingRequest = null;
-  for (const audio of $('#chat-messages').querySelectorAll('audio')) audio.pause();
+  speech.stopWithin($('#chat-messages'));
   $('#chat-messages').replaceChildren();
   if (id) messages.forEach(renderMessage);
   else $('#chat-messages').append(node('p', 'text-sm opacity-50 text-center mt-10', 'Новый диалог. Напиши, что нужно сделать.'));
@@ -690,6 +732,7 @@ async function transcribe(file, trigger) {
 function initializeWorkspace() {
   $$('[data-view]').forEach(b => b.onclick = () => guard(() => view(b.dataset.view)));
   $('#logout').onclick = () => guard(async () => {
+    speech.stop();
     const response = await fetch('/auth/logout', {
       method: 'POST',
       headers: {
@@ -703,6 +746,7 @@ function initializeWorkspace() {
     const workspace = $('.workspace');
     if (innerWidth >= 1200) workspace.classList.toggle('chat-hidden');
     else workspace.classList.toggle('chat-open');
+    if (workspace.classList.contains('chat-hidden') || (innerWidth < 1200 && !workspace.classList.contains('chat-open'))) speech.stopWithin($('#assistant'));
   };
   $('#refresh-mail').onclick = () => guard(() => busy($('#refresh-mail'), loadMail));
   $('#email-read-toggle').onclick = () => {
@@ -716,6 +760,7 @@ function initializeWorkspace() {
     await loadMail();
   }));
   $('#summarize').onclick = () => guard(() => busy($('#summarize'), async () => {
+    speech.stopWithin($('#summary'));
     const result = await post('/emails/summarize', selectedEmails.size ? {
       ids: [...selectedEmails]
     } : {
@@ -731,7 +776,7 @@ function initializeWorkspace() {
     }));
   }));
   $('#close-summary').onclick = () => {
-    $('#summary-audio audio')?.pause();
+    speech.stopWithin($('#summary'));
     $('#summary').classList.add('hidden');
     summaryText = '';
     for (const selector of ['#summary-text', '#summary-sources', '#summary-audio']) {
@@ -955,11 +1000,7 @@ async function initializeDetail() {
     InboxMarkdown.render($('#digest-body'), digest.error || digest.text);
     $('#digest-sources').replaceChildren(...digest.sources.map(sourceLink));
     $('#digest-speak').disabled = digest.status !== 'ready';
-    $('#digest-speak').onclick = () => guard(() => busy($('#digest-speak'), async () => audioPlayer($('#digest-audio'), await post('/digests/' + id + '/audio'))));
-    if (digest.audio_id) audioPlayer($('#digest-audio'), {
-      url: '/api/v1/media/' + digest.audio_id,
-      file_id: digest.audio_id
-    });
+    $('#digest-speak').onclick = () => guard(() => speak(digest.text, $('#digest-audio'), $('#digest-speak'), () => post('/digests/' + id + '/audio'), 'digest:' + id));
   }
 }
 if ($('.workspace')) initializeWorkspace();
