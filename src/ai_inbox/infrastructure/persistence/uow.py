@@ -4,7 +4,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, TypeVar
 
-from sqlalchemy import event, select
+from sqlalchemy import delete, event, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -72,12 +72,24 @@ class SqlRepository[T: e.Entity]:
             await self.session.delete(row)
 
 
+class ConversationRepository(SqlRepository[e.Conversation]):
+    async def delete(self, id: str) -> None:
+        # Delete the entire history, independent of the 500-row UI pagination limit.
+        # Created tasks/drafts/files are independent entities and remain available.
+        await self.session.execute(
+            delete(m.ActionRow).where(m.ActionRow.request_id.startswith(id + ":", autoescape=True))
+        )
+        await self.session.execute(delete(m.MessageRow).where(m.MessageRow.conversation_id == id))
+        await self.session.execute(delete(m.RunRow).where(m.RunRow.conversation_id == id))
+        await super().delete(id)
+
+
 class SqlUnitOfWork:
     def __init__(self, sessions: async_sessionmaker[AsyncSession]):
         self.session = sessions()
         self.tasks = SqlRepository(self.session, m.TaskRow, e.Task)
         self.drafts = SqlRepository(self.session, m.DraftRow, e.Draft)
-        self.conversations = SqlRepository(self.session, m.ConversationRow, e.Conversation)
+        self.conversations = ConversationRepository(self.session, m.ConversationRow, e.Conversation)
         self.messages = SqlRepository(self.session, m.MessageRow, e.Message)
         self.actions = SqlRepository(self.session, m.ActionRow, e.Action)
         self.runs = SqlRepository(self.session, m.RunRow, e.ChatRun)

@@ -121,3 +121,9 @@ body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
 #outbox-list .card { align-items: stretch; height: auto; }
 .mail-unread { border-left: 3px solid #8ebba7; }
 .mail-unread-dot { width: 6px; height: 6px; border-radius: 50%; background: #a7d9c8; }
+.conversation-list { position: absolute; inset: calc(100% + 6px) 0 auto; z-index: 40; max-height: 280px; overflow-y: auto; padding: 6px; background: #292929; border: 1px solid #494949; border-radius: 12px; box-shadow: 0 12px 28px #0006; }
+.conversation-row { display: flex; align-items: center; gap: 4px; padding: 2px 4px 2px 0; border-radius: 8px; }
+.conversation-row:hover, .conversation-current { background: #373737; }
+.conversation-open { min-width: 0; flex: 1; text-align: left; padding: 9px 10px; border-radius: 8px; cursor: pointer; }
+.conversation-remove { flex-shrink: 0; color: #c6c6c6; }
+.conversation-remove:hover { color: #f3b9bb; background: #4b3032; }

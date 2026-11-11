@@ -430,12 +430,84 @@ async function loadDigests() {
     target.append(card);
   }
 }
+let conversationItems = [],
+  conversationLoadRequest = 0;
+let deletionCandidate = null,
+  conversationDeleting = false;
+
+function closeConversationMenu() {
+  $('#conversation-list').hidden = true;
+  $('#conversation-select').setAttribute('aria-expanded', 'false');
+}
+
+function renderConversationList() {
+  const list = $('#conversation-list');
+  const current = conversationItems.find(item => item.id === currentConversation);
+  $('#conversation-label').textContent = current?.title || 'Новый диалог';
+  list.replaceChildren(button('＋ Новый диалог', 'btn btn-ghost btn-sm w-full justify-start', () => loadConversation('')));
+  for (const item of conversationItems) {
+    const row = node('div', 'conversation-row' + (item.id === currentConversation ? ' conversation-current' : ''));
+    row.setAttribute('role', 'listitem');
+    const open = button('', 'conversation-open', () => loadConversation(item.id));
+    open.append(node('span', 'block truncate text-sm', item.title), node('span', 'block text-[10px] opacity-40 mt-1', fmt(item.created_at)));
+    open.title = item.title;
+    const remove = button('✕', 'btn btn-ghost btn-xs btn-square conversation-remove', async () => {
+      closeConversationMenu();
+      deletionCandidate = item;
+      $('#delete-conversation-title').textContent = item.title;
+      $('#delete-conversation-error').classList.add('hidden');
+      $('#delete-conversation-dialog').showModal();
+    });
+    remove.title = 'Удалить диалог';
+    remove.setAttribute('aria-label', 'Удалить диалог: ' + item.title);
+    row.append(open, remove);
+    list.append(row);
+  }
+}
 async function refreshConversations() {
-  const items = await api('/conversations');
-  const select = $('#conversation-select');
-  select.replaceChildren(new Option('Новый диалог', ''));
-  items.forEach(c => select.add(new Option(c.title + ' · ' + fmt(c.created_at), c.id)));
-  select.value = currentConversation;
+  conversationItems = await api('/conversations');
+  renderConversationList();
+}
+async function confirmConversationDeletion() {
+  if (!deletionCandidate || conversationDeleting) return;
+  const item = deletionCandidate;
+  conversationDeleting = true;
+  $('#cancel-delete-conversation').disabled = true;
+  $('#close-delete-conversation').disabled = true;
+  try {
+    await busy($('#confirm-delete-conversation'), async () => {
+      try {
+        await api('/conversations/' + encodeURIComponent(item.id), {
+          method: 'DELETE'
+        });
+      } catch (error) {
+        if (error.status !== 404) throw error;
+      }
+      if (currentConversation === item.id) {
+        await loadConversation('');
+        $('#chat-text').value = '';
+        clearImage();
+      }
+      // Remove locally before refreshing: a failed refresh must not restore a deleted row.
+      conversationItems = conversationItems.filter(conversation => conversation.id !== item.id);
+      renderConversationList();
+      $('#delete-conversation-dialog').close();
+      deletionCandidate = null;
+      toast('Диалог удалён');
+      try {
+        await refreshConversations();
+      } catch {
+        toast('Диалог удалён. Список пока не удалось обновить.', true);
+      }
+    });
+  } catch (error) {
+    $('#delete-conversation-error').textContent = error.message;
+    $('#delete-conversation-error').classList.remove('hidden');
+  } finally {
+    conversationDeleting = false;
+    $('#cancel-delete-conversation').disabled = false;
+    $('#close-delete-conversation').disabled = false;
+  }
 }
 
 function renderMessage(message) {
@@ -486,15 +558,28 @@ function renderMessage(message) {
   $('#chat-messages').scrollTop = $('#chat-messages').scrollHeight;
 }
 async function loadConversation(id) {
+  const request = ++conversationLoadRequest;
+  closeConversationMenu();
+  let messages = [];
+  if (id) {
+    try {
+      messages = await api('/conversations/' + encodeURIComponent(id) + '/messages');
+    } catch (error) {
+      if (request !== conversationLoadRequest) return;
+      if (error.status !== 404) throw error;
+      id = '';
+      toast('Этот диалог уже удалён. Можно начать новый.');
+      conversationItems = await api('/conversations');
+    }
+  }
+  if (request !== conversationLoadRequest) return;
   currentConversation = id;
   pendingRequest = null;
-  $('#conversation-select').value = id;
+  for (const audio of $('#chat-messages').querySelectorAll('audio')) audio.pause();
   $('#chat-messages').replaceChildren();
-  if (id) {
-    for (const message of await api('/conversations/' + id + '/messages')) renderMessage(message);
-  } else {
-    $('#chat-messages').append(node('p', 'text-sm opacity-50 text-center mt-10', 'Новый диалог. Напиши, что нужно сделать.'));
-  }
+  if (id) messages.forEach(renderMessage);
+  else $('#chat-messages').append(node('p', 'text-sm opacity-50 text-center mt-10', 'Новый диалог. Напиши, что нужно сделать.'));
+  renderConversationList();
   const url = new URL(location);
   if (id) url.searchParams.set('conversation', id);
   else url.searchParams.delete('conversation');
@@ -522,6 +607,7 @@ async function sendMessage() {
   sending = true;
   const send = $('#send-chat');
   send.disabled = true;
+  closeConversationMenu();
   $('#conversation-select').disabled = true;
   $('#new-chat').disabled = true;
   let waiting;
@@ -702,7 +788,23 @@ function initializeWorkspace() {
     else toast('Дайджест готов');
   }));
   $('#new-chat').onclick = () => guard(() => loadConversation(''));
-  $('#conversation-select').onchange = event => guard(() => loadConversation(event.target.value));
+  $('#conversation-select').onclick = () => {
+    const list = $('#conversation-list');
+    list.hidden = !list.hidden;
+    $('#conversation-select').setAttribute('aria-expanded', String(!list.hidden));
+  };
+  document.addEventListener('click', event => {
+    if (!$('#conversation-picker').contains(event.target)) closeConversationMenu();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') closeConversationMenu();
+  });
+  $('#cancel-delete-conversation').onclick = $('#close-delete-conversation').onclick = () => $('#delete-conversation-dialog').close();
+  $('#delete-conversation-dialog').addEventListener('cancel', event => {
+    if (conversationDeleting) event.preventDefault();
+  });
+  $('#delete-conversation-dialog').addEventListener('close', () => $('#conversation-select').focus());
+  $('#confirm-delete-conversation').onclick = confirmConversationDeletion;
   $$('.suggestion').forEach(b => b.onclick = () => openChat(b.dataset.prompt));
   $('#chat-form').onsubmit = event => {
     event.preventDefault();

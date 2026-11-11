@@ -45,6 +45,19 @@ class ChatWithAssistant:
                 for c in await uow.conversations.list()
             ]
 
+    async def delete_conversation(self, id: str) -> dict[str, Any]:
+        lock = self.locks[id]
+        if lock.locked():
+            raise Conflict("Ассистент ещё отвечает в этом диалоге. Дождись завершения и повтори.")
+        async with lock:
+            async with self.uow() as uow:
+                await uow.conversations.get(id)
+                if await uow.runs.list(conversation_id=id, status="running"):
+                    raise Conflict("В диалоге есть незавершённый запрос. Удаление пока недоступно.")
+                await uow.conversations.delete(id)
+                await uow.commit()
+        return {"id": id, "deleted": True}
+
     async def messages(self, id: str) -> list[dict[str, Any]]:
         async with self.uow() as uow:
             await uow.conversations.get(id)

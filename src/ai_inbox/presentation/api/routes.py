@@ -13,6 +13,7 @@ from .schemas import (
     ComposeEmailInput,
     ComposeEmailResponse,
     ConversationCreate,
+    ConversationDeleteResponse,
     ConversationResponse,
     DeliveryResponse,
     DigestResponse,
@@ -243,6 +244,16 @@ async def conversations(request: Request, owner: Owner):
 )
 async def create_conversation(data: ConversationCreate, request: Request, owner: Owner):
     return await container(request).chat.create_conversation(data.title)
+
+
+@router.delete(
+    "/conversations/{id}",
+    response_model=ConversationDeleteResponse,
+    tags=["Диалоги"],
+    summary="Удалить диалог со всей историей; созданные сущности остаются",
+)
+async def delete_conversation(id: str, request: Request, owner: Owner):
+    return await container(request).chat.delete_conversation(id)
 
 
 @router.get(

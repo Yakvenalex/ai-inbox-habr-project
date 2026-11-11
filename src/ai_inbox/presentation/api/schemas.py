@@ -263,3 +263,8 @@ class EmailReadBatchItem(Schema):
 
 class EmailReadBatchResponse(Schema):
     results: list[EmailReadBatchItem]
+
+
+class ConversationDeleteResponse(Schema):
+    id: str
+    deleted: Literal[True]
