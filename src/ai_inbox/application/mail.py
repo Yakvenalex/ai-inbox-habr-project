@@ -46,6 +46,11 @@ class Mail:
     async def list_emails(self, unread: bool = True, limit: int = 20) -> list[dict[str, Any]]:
         return [public(email) for email in await self.gateway.list_emails(unread, limit)]
 
+    async def page(
+        self, unread: bool = True, limit: int = 20, before: str | None = None
+    ) -> dict[str, Any]:
+        return public(await self.gateway.page(unread, limit, before))
+
     async def read(self, id: str) -> dict[str, Any]:
         return public(await self.gateway.read(id))
 

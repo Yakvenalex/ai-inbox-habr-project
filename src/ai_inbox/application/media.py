@@ -1,3 +1,4 @@
+import asyncio
 import re
 from datetime import timedelta
 from typing import Any
@@ -22,6 +23,8 @@ class MediaService:
     ):
         self.uow, self.storage, self.speech = uow, storage, speech
         self.clock, self.retention_days = clock, retention_days
+        # Single process: serialize cache checks and paid generation, without a lock per ID.
+        self.digest_audio_lock = asyncio.Lock()
 
     async def save_image(self, data: bytes, content_type: str) -> dict[str, Any]:
         # Decoding/normalization belongs to the presentation-side upload adapter.
@@ -83,6 +86,10 @@ class MediaService:
         return public(media)
 
     async def digest_audio(self, id: str) -> dict[str, Any]:
+        async with self.digest_audio_lock:
+            return await self._digest_audio(id)
+
+    async def _digest_audio(self, id: str) -> dict[str, Any]:
         async with self.uow() as uow:
             digest = await uow.digests.get(id)
         if digest.status != "ready":

@@ -3,6 +3,7 @@
   <div id="outgoing-state" class="alert text-sm mb-5 hidden" role="status"></div>
   <div class="card bg-base-100 border border-base-300"><div class="card-body p-5 lg:p-6">
     <form id="compose-form" class="grid gap-5">
+      <p id="outgoing-save-state" class="text-xs opacity-60" role="status">Черновик ещё не сохранён</p>
       <label class="grid gap-2 text-sm">Кому<input class="input w-full" type="email" name="recipient" aria-label="Получатель письма" placeholder="name@example.com" required maxlength="254" autocomplete="email"></label>
       <details class="ai-compose rounded-xl border border-base-300 p-4"><summary class="cursor-pointer font-medium text-sm">✦ Помочь написать письмо</summary><div class="grid gap-3 mt-4"><textarea id="outgoing-outline" class="textarea w-full min-h-28" aria-label="Набросок письма для ИИ" placeholder="Например: вежливо попросить уточнить реквизиты счёта. Кратко, без придуманных сроков." maxlength="10000"></textarea><button id="compose-with-ai" class="btn btn-outline btn-sm justify-self-start" type="button">Составить тему и текст</button><p class="text-xs opacity-50">ИИ заполнит редактор. Проверь и при необходимости исправь текст перед отправкой.</p></div></details>
       <label class="grid gap-2 text-sm">Тема<input class="input w-full" name="subject" aria-label="Тема исходящего письма" placeholder="О чём письмо?" required maxlength="300"></label>

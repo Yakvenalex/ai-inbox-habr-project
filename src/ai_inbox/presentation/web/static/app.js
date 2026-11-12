@@ -199,7 +199,8 @@ let unread = true,
   sending = false;
 const selectedEmails = new Set();
 const mailChanges = new Map();
-let listedEmails = [], emailDeletionCandidates = [];
+let listedEmails = [], emailDeletionCandidates = [], mailNextCursor = null, mailLoading = false;
+const mailPageSize = Number($('.workspace')?.dataset.mailPageSize) || 20;
 const trashIcon = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6"/></svg>';
 let mailListRequest = 0,
   emailOpenRequest = 0,
@@ -231,32 +232,49 @@ async function view(name) {
 }
 
 function updateMailSelection() {
+  $('#load-more-mail').disabled = mailBatchBusy || mailLoading;
   $('#mail-selected-count').textContent = selectedEmails.size ? 'Выбрано: ' + selectedEmails.size : 'Письма не выбраны';
-  $('#mark-selected-read').disabled = !selectedEmails.size || mailBatchBusy;
-  $('#mark-selected-unread').disabled = !selectedEmails.size || mailBatchBusy;
-  $('#delete-selected-emails').disabled = !selectedEmails.size || mailBatchBusy;
+  $('#mark-selected-read').disabled = !selectedEmails.size || mailBatchBusy || mailLoading;
+  $('#mark-selected-unread').disabled = !selectedEmails.size || mailBatchBusy || mailLoading;
+  $('#delete-selected-emails').disabled = !selectedEmails.size || mailBatchBusy || mailLoading;
 }
-async function loadMail(preserveSelection = false) {
+async function loadMail(preserveSelection = false, append = false) {
+  if (append && (!mailNextCursor || mailLoading)) return;
   const request = ++mailListRequest;
   const target = $('#mail-list');
-  target.replaceChildren(node('p', 'text-sm opacity-50', 'Получаем письма…'));
+  const cursor = append ? mailNextCursor : null;
+  mailLoading = true;
+  $('#load-more-mail').disabled = true;
+  if (!append) {
+    mailNextCursor = null;
+    $('#load-more-mail').hidden = true;
+    $('#mail-paging').textContent = '';
+    if (!preserveSelection) selectedEmails.clear();
+    target.replaceChildren(node('p', 'text-sm opacity-50', 'Получаем письма…'));
+  }
+  updateMailSelection();
   try {
-    const [emails, counts] = await Promise.all([
-      api('/emails?unread=' + unread + '&limit=20'),
+    const [page, counts] = await Promise.all([
+      api('/emails/page?unread=' + unread + '&limit=' + mailPageSize + (cursor ? '&before=' + encodeURIComponent(cursor) : '')),
       api('/emails/status').catch(() => null)
     ]);
     if (request !== mailListRequest) return;
-    listedEmails = emails;
+    const emails = page.items;
+    const existingIds = new Set(append ? listedEmails.map(email => email.id) : []);
+    listedEmails = append ? listedEmails.concat(emails.filter(email => !existingIds.has(email.id))) : emails;
+    mailNextCursor = page.next_cursor;
+    $('#load-more-mail').hidden = !mailNextCursor;
+    $('#mail-paging').textContent = 'Показано: ' + listedEmails.length + (counts ? ' из ' + (unread ? counts.unread : counts.total) : '');
     target.replaceChildren();
     if (!preserveSelection) selectedEmails.clear();
-    const available = new Set(emails.map(email => email.id));
+    const available = new Set(listedEmails.map(email => email.id));
     for (const id of selectedEmails)
       if (!available.has(id)) selectedEmails.delete(id);
     $('#mail-count').textContent = counts ? counts.unread : '—';
     $('#mail-count').title = counts ? 'Непрочитанных в INBOX: ' + counts.unread : 'Счётчик временно недоступен';
     updateMailSelection();
-    if (!emails.length) return empty(target, unread ? 'Всё прочитано' : 'Писем пока нет', unread ? 'Непрочитанных писем нет. Все письма доступны в соседней вкладке.' : 'Обнови список позже.');
-    for (const email of emails) {
+    if (!listedEmails.length) return empty(target, mailNextCursor ? 'Список изменился' : unread ? 'Всё прочитано' : 'Писем пока нет', mailNextCursor ? 'Эти письма уже перемещены. Загрузи следующую страницу или обнови список.' : unread ? 'Непрочитанных писем нет. Все письма доступны в соседней вкладке.' : 'Обнови список позже.');
+    for (const email of listedEmails) {
       const card = node('article', 'mail-card card bg-base-100 border border-base-300 p-4' + (email.unread ? ' mail-unread' : ''));
       card.dataset.emailId = email.id;
       const row = node('div', 'flex gap-3 items-start');
@@ -266,6 +284,10 @@ async function loadMail(preserveSelection = false) {
       select.checked = selectedEmails.has(email.id);
       select.setAttribute('aria-label', 'Выбрать письмо: ' + email.subject);
       select.onchange = () => {
+        if (select.checked && selectedEmails.size >= 20) {
+          select.checked = false;
+          return toast('За один раз можно выбрать до 20 писем.', true);
+        }
         select.checked ? selectedEmails.add(email.id) : selectedEmails.delete(email.id);
         updateMailSelection();
       };
@@ -289,8 +311,18 @@ async function loadMail(preserveSelection = false) {
       target.append(card);
     }
   } catch (error) {
-    if (request === mailListRequest) empty(target, 'Почта недоступна', error.message);
+    if (request === mailListRequest && !append) {
+      empty(target, 'Почта недоступна', error.message);
+      listedEmails = [];
+      selectedEmails.clear();
+    }
     throw error;
+  } finally {
+    if (request === mailListRequest) {
+      mailLoading = false;
+      $('#load-more-mail').disabled = mailBatchBusy;
+      updateMailSelection();
+    }
   }
 }
 
@@ -910,6 +942,7 @@ async function transcribe(file, trigger) {
 function initializeWorkspace() {
   $$('[data-view]').forEach(b => b.onclick = () => guard(() => view(b.dataset.view)));
   $('#logout').onclick = () => guard(async () => {
+    if (!await InboxUnsaved.confirmLeave()) return;
     speech.stop();
     const response = await fetch('/auth/logout', {
       method: 'POST',
@@ -917,7 +950,7 @@ function initializeWorkspace() {
         'X-CSRF-Token': csrf()
       }
     });
-    if (response.ok) location.assign('/login');
+    if (response.ok) {InboxUnsaved.allowNavigation(); location.assign('/login');}
     else throw new Error('Не удалось выйти. Обнови страницу.');
   });
   $('#chat-toggle').onclick = () => {
@@ -927,6 +960,7 @@ function initializeWorkspace() {
     if (workspace.classList.contains('chat-hidden') || (innerWidth < 1200 && !workspace.classList.contains('chat-open'))) speech.stopWithin($('#assistant'));
   };
   $('#refresh-mail').onclick = () => guard(() => busy($('#refresh-mail'), loadMail));
+  $('#load-more-mail').onclick = () => guard(() => loadMail(true, true));
   $('#email-read-toggle').onclick = () => {
     if (selectedEmail) changeEmailReadState(selectedEmail, !selectedEmail.unread);
   };
@@ -1157,9 +1191,20 @@ async function initializeDetail() {
     const form = $('#edit-draft-form');
     form.elements.subject.value = draft.subject;
     form.elements.body.value = draft.body;
+    const changes = InboxUnsaved.track(() => ({subject: form.elements.subject.value, body: form.elements.body.value}), dirty => {
+      $('#saved-state').textContent = dirty ? 'Есть несохранённые изменения' : 'Все изменения сохранены';
+    });
+    form.addEventListener('input', () => changes.check());
+    // The compose page reads the persisted draft. Do not silently send an older version.
+    form.querySelector('a').addEventListener('click', event => {
+      if (!changes.dirty()) return;
+      event.preventDefault();
+      toast('Сначала сохрани изменения, затем подготовь письмо к отправке.', true);
+    });
     form.onsubmit = event => {
       event.preventDefault();
       guard(() => busy(event.submitter, async () => {
+        const snapshot = changes.snapshot();
         const result = await api('/drafts/' + id, {
           method: 'PATCH',
           body: JSON.stringify({
@@ -1168,7 +1213,7 @@ async function initializeDetail() {
           })
         });
         $('#detail-title').textContent = result.subject;
-        $('#saved-state').textContent = 'Сохранено · ' + fmt(result.updated_at);
+        changes.saved(snapshot);
         toast('Черновик обновлён');
       }));
     };

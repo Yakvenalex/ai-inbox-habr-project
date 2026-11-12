@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block body %}
-<div class="workspace" data-timezone="{{ timezone }}">
+<div class="workspace" data-timezone="{{ timezone }}" data-mail-page-size="{{ mail_page_size }}">
 <aside class="app-sidebar bg-base-100 border-r border-base-300 flex flex-col p-5 gap-8">
   <a href="/" class="brand flex gap-3 items-center"><span class="brand-icon">✦</span><span class="text-xl font-bold tracking-tight">AI Inbox</span></a>
   <div><p class="section-label mb-3">РАБОЧЕЕ ПРОСТРАНСТВО</p>
@@ -30,7 +30,7 @@
       <div id="summary" class="card bg-base-100 border border-base-300 mb-5 hidden"><div class="card-body"><div class="flex items-center justify-between gap-3"><h2 class="font-semibold">Краткая сводка</h2><div class="flex items-center gap-1"><button id="speak-summary" class="btn btn-ghost btn-xs">♫ Озвучить</button><button id="close-summary" type="button" class="btn btn-ghost btn-sm btn-square" aria-label="Убрать сводку" title="Убрать сводку">✕</button></div></div><div id="summary-text" class="markdown-body"></div><div id="summary-sources" class="flex flex-wrap gap-2"></div><div id="summary-audio"></div></div></div>
       <div class="flex justify-between items-center mb-4 gap-2"><div role="tablist" class="tabs tabs-box"><button role="tab" class="tab tab-active" data-unread="true">Непрочитанные</button><button role="tab" class="tab" data-unread="false">Все письма</button></div><span class="text-xs opacity-40">Открытое письмо отмечается прочитанным</span></div>
       <div class="flex flex-wrap items-center gap-2 mb-4"><span id="mail-selected-count" class="text-xs opacity-50 mr-auto">Письма не выбраны</span><button id="mark-selected-read" class="btn btn-ghost btn-xs" disabled>✓ Прочитанными</button><button id="mark-selected-unread" class="btn btn-ghost btn-xs" disabled>○ Непрочитанными</button><button id="delete-selected-emails" class="btn btn-ghost btn-xs text-error" disabled>Удалить</button></div>
-      <div id="mail-list" class="grid gap-3" aria-live="polite"></div>
+      <div id="mail-list" class="grid gap-3" aria-live="polite"></div><div class="flex flex-wrap items-center justify-between gap-3 mt-5"><span id="mail-paging" class="text-xs opacity-50" role="status"></span><button id="load-more-mail" class="btn btn-outline btn-sm" type="button" hidden>Загрузить ещё</button></div>
     </section>
     <section data-panel="tasks" hidden>
       <div class="flex justify-between items-center mb-7"><div><p class="section-label mb-2">ПЛАН НА ДЕНЬ</p><h1 class="text-3xl font-bold">Задачи</h1><p class="text-sm opacity-50 mt-2">Из писем, голоса и твоих заметок.</p></div><button id="new-task" class="btn btn-primary btn-sm">＋ Задача</button></div>

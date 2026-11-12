@@ -12,6 +12,7 @@ from ai_inbox.domain.entities import (
     Draft,
     Email,
     EmailDeletion,
+    EmailPage,
     EmailReadState,
     Entity,
     MailboxCounts,
@@ -73,6 +74,7 @@ class MailGateway(Protocol):
     async def list_emails(self, unread: bool, limit: int) -> list[Email]: ...
     async def read(self, email_id: str) -> Email: ...
     async def counts(self) -> MailboxCounts: ...
+    async def page(self, unread: bool, limit: int, before: str | None = None) -> EmailPage: ...
 
 
 class MailStatusGateway(Protocol):

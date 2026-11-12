@@ -26,6 +26,7 @@ from .schemas import (
     EmailDeleteBatchResponse,
     EmailDeleteInput,
     EmailDeleteResponse,
+    EmailPageResponse,
     EmailReadBatchInput,
     EmailReadBatchResponse,
     EmailReadInput,
@@ -154,6 +155,25 @@ async def emails(
 )
 async def summarize(data: SummarizeRequest, request: Request, owner: Owner):
     return await container(request).mail.summarize(data.ids, data.limit)
+
+
+@router.get(
+    "/emails/page",
+    response_model=EmailPageResponse,
+    tags=["Почта"],
+    summary="Страница писем от новых к старым без изменения прочитанности",
+    description="Передавай next_cursor предыдущей страницы как before. Курсор связан с "
+    "INBOX/UIDVALIDITY/UID, поэтому новые и удалённые письма не сдвигают страницы. "
+    "После смены UIDVALIDITY нужно обновить список. Legacy GET /emails остаётся списком.",
+)
+async def email_page(
+    request: Request,
+    owner: Owner,
+    unread: bool = True,
+    limit: Annotated[int, Query(ge=1, le=50)] = 20,
+    before: Annotated[str | None, Query(max_length=500)] = None,
+):
+    return await container(request).mail.page(unread, limit, before)
 
 
 @router.get(

@@ -10,7 +10,7 @@ from email import message_from_bytes
 from html.parser import HTMLParser
 from typing import Any
 
-from ai_inbox.domain.entities import Email, EmailDeletion, EmailReadState, MailboxCounts
+from ai_inbox.domain.entities import Email, EmailDeletion, EmailPage, EmailReadState, MailboxCounts
 from ai_inbox.domain.errors import Conflict, InvalidInput, NotFound, ProviderUnavailable, TooLarge
 
 MAX_MESSAGE_BYTES = 2 * 1024 * 1024
@@ -128,12 +128,31 @@ class ImapMail:
         )
 
     def _list(self, unread: bool, limit: int) -> list[Email]:
+        return self._page(unread, limit).items
+
+    def _page(self, unread: bool, limit: int, before: str | None = None) -> EmailPage:
+        cursor = decode_id(before) if before else None
         with self._connect() as conn:
             validity = self._validity(conn)
-            status, data = conn.uid("search", None, "UNSEEN" if unread else "ALL")
+            if cursor and cursor[0] != validity:
+                raise Conflict("Почтовый ящик изменился. Обнови список и начни с последних писем.")
+            criteria = ["UNSEEN" if unread else "ALL"]
+            if cursor:
+                upper = int(cursor[1]) - 1
+                if upper <= 0:
+                    return EmailPage(items=[], next_cursor=None)
+                criteria += ["UID", f"1:{upper}"]
+            status, data = conn.uid("search", None, *criteria)
             if status != "OK":
                 raise ProviderUnavailable("Не удалось получить список писем.")
-            ids = (data[0] or b"").split()[-limit:][::-1]
+            raw_ids = (data[0] or b"").split()
+            if any(not uid.isdigit() or int(uid) <= 0 for uid in raw_ids):
+                raise ProviderUnavailable("IMAP вернул некорректные UID писем.")
+            ids = sorted(set(raw_ids), key=int, reverse=True)
+            if cursor:
+                ids = [uid for uid in ids if int(uid) < int(cursor[1])]
+            more = len(ids) > limit
+            ids = ids[:limit]
             result = []
             for uid in ids:
                 status, parts = conn.uid(
@@ -144,7 +163,10 @@ class ImapMail:
                 for part in parts:
                     if isinstance(part, tuple):
                         result.append(self._parse(validity, uid.decode(), part[1], part[0], False))
-            return result
+            return EmailPage(
+                items=result,
+                next_cursor=email_id(validity, ids[-1].decode()) if more else None,
+            )
 
     def _read(self, id: str) -> Email:
         expected, uid = decode_id(id)
@@ -310,6 +332,11 @@ class ImapMail:
         if not 1 <= limit <= self.max_limit:
             raise InvalidInput(f"Лимит писем: от 1 до {self.max_limit}.")
         return await self._run(self._list, unread, limit)
+
+    async def page(self, unread: bool, limit: int, before: str | None = None) -> EmailPage:
+        if not 1 <= limit <= self.max_limit:
+            raise InvalidInput(f"Лимит писем: от 1 до {self.max_limit}.")
+        return await self._run(self._page, unread, limit, before)
 
     async def read(self, email_id: str) -> Email:
         return await self._run(self._read, email_id)

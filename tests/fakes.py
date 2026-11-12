@@ -1,6 +1,7 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 
-from ai_inbox.domain.entities import Email, EmailDeletion, EmailReadState, MailboxCounts
+from ai_inbox.domain.entities import Email, EmailDeletion, EmailPage, EmailReadState, MailboxCounts
 from ai_inbox.domain.errors import NotFound, ProviderUnavailable
 
 
@@ -13,7 +14,7 @@ class FakeClock:
 
 
 class FakeMail:
-    def __init__(self):
+    def __init__(self, count=1):
         self.email = Email(
             id="synthetic-email",
             uid="42",
@@ -28,18 +29,42 @@ class FakeMail:
         )
         self.reads = 0
         self.deleted = False
+        self.extra = [
+            replace(
+                self.email,
+                id=f"synthetic-email-{i}",
+                uid=str(42 - i),
+                subject=f"Учебное письмо {i:02d}",
+                text=f"Синтетическое письмо номер {i}.",
+                attachments=[],
+            )
+            for i in range(1, count)
+        ]
+        self.deleted_ids = set()
         self.deletions = 0
 
     async def list_emails(self, unread, limit):
-        return (
-            [self.email][:limit] if not self.deleted and (not unread or self.email.unread) else []
-        )
+        emails = ([] if self.deleted else [self.email]) + self.extra
+        return [e for e in emails if e.id not in self.deleted_ids and (not unread or e.unread)][
+            :limit
+        ]
+
+    async def page(self, unread, limit, before=None):
+        emails = await self.list_emails(unread, 1000)
+        if before:
+            all_ids = [self.email.id] + [e.id for e in self.extra]
+            if before not in all_ids:
+                raise NotFound("Курсор не найден.")
+            emails = [e for e in emails if all_ids.index(e.id) > all_ids.index(before)]
+        more = len(emails) > limit
+        return EmailPage(items=emails[:limit], next_cursor=emails[limit - 1].id if more else None)
 
     async def read(self, email_id):
-        if email_id != self.email.id or self.deleted:
+        email = next((e for e in [self.email] + self.extra if e.id == email_id), None)
+        if not email or email_id in self.deleted_ids or email_id == self.email.id and self.deleted:
             raise NotFound("Письмо не найдено.")
         self.reads += 1
-        return self.email
+        return email
 
     async def set_unread(self, email_id, unread):
         email = await self.read(email_id)
@@ -47,17 +72,18 @@ class FakeMail:
         return EmailReadState(id=email_id, unread=unread)
 
     async def counts(self):
-        return MailboxCounts(
-            total=int(not self.deleted), unread=int(not self.deleted and self.email.unread)
-        )
+        emails = await self.list_emails(False, 1000)
+        return MailboxCounts(total=len(emails), unread=sum(e.unread for e in emails))
 
     async def delete(self, email_id):
-        if email_id != self.email.id:
+        if email_id not in [self.email.id] + [e.id for e in self.extra]:
             raise ProviderUnavailable("Не удалось подтвердить удаление.")
-        absent = self.deleted
+        absent = email_id in self.deleted_ids or email_id == self.email.id and self.deleted
         if not absent:
             self.deletions += 1
-        self.deleted = True
+        self.deleted_ids.add(email_id)
+        if email_id == self.email.id:
+            self.deleted = True
         return EmailDeletion(id=email_id, already_absent=absent)
 
 

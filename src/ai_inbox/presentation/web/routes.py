@@ -65,6 +65,7 @@ async def index(request: Request, owner: Owner):
                 else "выключено"
             ),
             "timezone": container(request).settings.app_timezone,
+            "mail_page_size": min(20, container(request).settings.mail_fetch_limit),
         },
     )
 

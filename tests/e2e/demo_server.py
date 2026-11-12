@@ -184,7 +184,7 @@ def main():
     settings = asyncio.run(prepare())
     c = Container(
         settings,
-        mail=FakeMail(),
+        mail=FakeMail(count=25),
         assistant=DemoAssistant(),
         speech=DemoSpeech(),
         sender=FakeSender(),

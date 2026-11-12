@@ -17,6 +17,12 @@
     active = false,
     uploadActive = false;
   let confirmation = null;
+  const changes = InboxUnsaved.track(() => ({
+    recipient: form.elements.recipient.value, subject: form.elements.subject.value,
+    body: form.elements.body.value, attachment_ids: attachments.map(file => file.file_id)
+  }), dirty => {
+    $('#outgoing-save-state').textContent = dirty ? 'Есть несохранённые изменения' : letterId ? 'Все изменения сохранены' : 'Черновик ещё не сохранён';
+  });
 
   function status(message, error = false) {
     const target = $('#outgoing-state');
@@ -46,6 +52,7 @@
         attachments = attachments.filter(item => item.file_id !== file.file_id);
         confirmation = null;
         renderAttachments();
+        changes.check();
       });
       remove.setAttribute('aria-label', 'Убрать вложение: ' + file.name);
       remove.disabled = locked || active || uploadActive;
@@ -60,6 +67,7 @@
     locked = false;
     confirmation = null;
     form.reset();
+    changes.saved();
     $('#outgoing-state').classList.add('hidden');
     const url = new URL(location);
     url.searchParams.delete('outgoing');
@@ -84,6 +92,7 @@
     locked = !['draft', 'failed'].includes(letter.status);
     status(stateText(letter), ['unknown', 'failed'].includes(letter.status));
     controls();
+    changes.saved();
     const url = new URL(location);
     url.searchParams.set('outgoing', letter.id);
     url.searchParams.delete('draft');
@@ -116,10 +125,15 @@
   }
   async function openLetter(id) {
     if (active || uploadActive) throw new Error('Дождись завершения текущей операции.');
-    const letter = await api('/outbox/' + encodeURIComponent(id));
-    confirmation = null;
-    fill(letter);
-    await view('compose');
+    if (changes.dirty() && !await InboxUnsaved.confirmLeave()) return;
+    active = true;
+    controls();
+    try {
+      const letter = await api('/outbox/' + encodeURIComponent(id));
+      confirmation = null;
+      fill(letter);
+      await view('compose');
+    } finally {active = false; controls();}
   }
   async function loadOutbox() {
     const items = await api('/outbox');
@@ -135,12 +149,14 @@
       target.append(card);
     }
   }
-  $('#reset-outgoing').onclick = () => {
+  $('#reset-outgoing').onclick = async () => {
+    if (!await InboxUnsaved.confirmLeave()) return;
     reset();
     form.elements.recipient.focus();
   };
   form.addEventListener('input', () => {
     confirmation = null;
+    changes.check();
   });
   form.onsubmit = event => {
     event.preventDefault();
@@ -159,6 +175,7 @@
       });
       form.elements.subject.value = result.subject;
       form.elements.body.value = result.body;
+      changes.check();
       confirmation = null;
       status('Текст подготовлен. Проверь получателя, тему и содержание перед отправкой.');
     } catch (error) {
@@ -183,6 +200,7 @@
           body: data
         }));
         renderAttachments();
+        changes.check();
       }
       confirmation = null;
       toast('Файлы прикреплены');
@@ -250,11 +268,13 @@
   });
   guard(async () => {
     const params = new URL(location).searchParams;
-    if (params.get('outgoing')) await openLetter(params.get('outgoing'));
-    else if (params.get('draft')) {
+    const restoreEditor = !params.get('view') || params.get('view') === 'compose';
+    if (restoreEditor && params.get('outgoing')) await openLetter(params.get('outgoing'));
+    else if (restoreEditor && params.get('draft')) {
       const draft = await api('/drafts/' + encodeURIComponent(params.get('draft')));
       form.elements.subject.value = draft.subject;
       form.elements.body.value = draft.body;
+      changes.check();
       await view('compose');
       status('Текст черновика перенесён. Укажи получателя и проверь письмо.');
     }

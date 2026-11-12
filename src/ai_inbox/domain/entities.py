@@ -175,3 +175,9 @@ class EmailDeletion:
 class MailboxCounts:
     total: int
     unread: int
+
+
+@dataclass(frozen=True)
+class EmailPage:
+    items: list[Email]
+    next_cursor: str | None

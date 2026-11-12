@@ -239,6 +239,11 @@ class DeliveryResponse(EntityResponse):
     accepted_at: datetime | None
 
 
+class EmailPageResponse(Schema):
+    items: list[EmailResponse]
+    next_cursor: str | None
+
+
 class EmailReadInput(Schema):
     unread: StrictBool = Field(
         examples=[False], description="false — прочитано; true — непрочитано"
