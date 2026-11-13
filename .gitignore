@@ -44,3 +44,7 @@ logs/
 *~
 .DS_Store
 Thumbs.db
+
+# Материалы для написания статьи остаются только локально
+/docs/article-outline.md
+/docs/article-handoff.md

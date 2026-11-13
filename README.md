@@ -192,10 +192,8 @@ LLM использует `OpenAIChatCompletionsModel`; tracing в OpenAI отк�
 прерванные ответы получают failed с сохранёнными результатами.
 
 Обоснования: [docs/decisions.md](docs/decisions.md).
-План материала для статьи: [docs/article-outline.md](docs/article-outline.md).
 Фактические проверки: [docs/verification.md](docs/verification.md).
 Ручная приёмка: [docs/final-checklist.md](docs/final-checklist.md).
-Контекст для статьи: [docs/article-handoff.md](docs/article-handoff.md).
 
 ## Проверки и безопасная демонстрация
 
@@ -394,7 +392,7 @@ SMTP smoke делает только TLS/login/NOOP. AI smoke используе
 `anyvoice/builtin-7` («Спокойный женский», TTS). Все IDs задаются окружением.
 Голос AnyModel задаётся model ID; поле voice не отправляется. Автоматический fallback
 не включён: резерв требует повторной проверки. Названия, цены и доступность маршрутов
-перед публикацией статьи нужно проверить заново.
+перед использованием нужно проверить заново.
 
 - Один владелец, INBOX, локальная SQLite, один процесс; регистрации и refresh-токенов нет.
 - Компьютер и процесс должны работать в момент расписания. Нет рассылки, запуска во
