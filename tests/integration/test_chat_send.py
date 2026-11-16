@@ -26,7 +26,13 @@ async def confirm(c, conversation, text="Всё ок, отправляй", reque
     return await c.chat(conversation, text, request_id or str(uuid4()))
 
 
-async def test_review_then_confirm_sends_once_without_model_and_survives_reload(client):
+@pytest.mark.parametrize(
+    "confirmation",
+    ["Да, всё ок!", "все ок - отправляй", "Всё ок – отправляй", "Всё ок — отправляй!"],
+)
+async def test_review_then_confirm_sends_once_without_model_and_survives_reload(
+    client, confirmation
+):
     c = client.container
     conversation, letter = await prepare(c)
     async with c.uow() as uow:
@@ -39,7 +45,7 @@ async def test_review_then_confirm_sends_once_without_model_and_survives_reload(
     c.chat = ChatWithAssistant(c.uow, c.assistant, c.storage, c.chat.tools_factory, c.clock)
     calls = c.assistant.calls
     request_id = str(uuid4())
-    result = await confirm(c, conversation, "Да, всё ок!", request_id)
+    result = await confirm(c, conversation, confirmation, request_id)
     assert result["status"] == "completed" and result["error"] is None
     assert result["actions"][0]["name"] == "send_outgoing_email"
     assert result["actions"][0]["result"]["status"] == "sent"
@@ -48,7 +54,7 @@ async def test_review_then_confirm_sends_once_without_model_and_survives_reload(
     assert c.sender.messages[0].recipient == LETTER["recipient"]
     assert c.sender.messages[0].body == LETTER["body"]
     assert (await c.outbox.get(letter["id"]))["status"] == "sent"
-    assert await confirm(c, conversation, "Да, всё ок!", request_id) == result
+    assert await confirm(c, conversation, confirmation, request_id) == result
     c.assistant.steps = [("send_outgoing_email", {})]
     again = await confirm(c, conversation)
     assert again["actions"][0]["result"]["error"]["code"] == "forbidden"
@@ -123,7 +129,15 @@ async def test_changed_draft_requires_new_review(client, auth, field):
 
 @pytest.mark.parametrize(
     "text",
-    ["Не отправляй", "Все ок, но поменяй тему", "Расскажи про задачи", '"Всё ок, отправляй"'],
+    [
+        "Не отправляй",
+        "Все ок, но поменяй тему",
+        "Все ок — не отправляй",
+        "Все ок - но поменяй тему",
+        "Все ок — отправляй?",
+        "Расскажи про задачи",
+        '"Всё ок, отправляй"',
+    ],
 )
 async def test_other_message_revokes_pending_confirmation(client, text):
     c = client.container

@@ -11,7 +11,8 @@ REVIEW_TOOLS = {"prepare_outgoing_email", "review_outgoing_email"}
 def confirms_sending(text: str) -> bool:
     if len(text) > 160 or any(char in text for char in "?\"«»'"):
         return False
-    normalized = re.sub(r"[,.!;:]+", " ", text.lower().replace("ё", "е"))
+    # Treat common typed dashes like commas; the whole phrase must still match.
+    normalized = re.sub(r"[-,.!;:–—]+", " ", text.lower().replace("ё", "е"))
     normalized = " ".join(normalized.split())
     phrase = (
         r"да|ок|окей|все (?:ок|окей|хорошо|верно|правильно)|"
