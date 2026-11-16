@@ -46,5 +46,7 @@ logs/
 Thumbs.db
 
 # Материалы для написания статьи остаются только локально
+/article/
+article.md
 /docs/article-outline.md
 /docs/article-handoff.md
