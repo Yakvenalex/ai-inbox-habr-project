@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     auth_cookie_secure: bool = False
     base_url: str = "https://anymodel.org/v1"
     main_key: SecretStr
-    llm_model: str = "ag/gemini-3.8-flash-low"
+    llm_model: str = "cx/gpt-6.1-terra"
     llm_fallback_model: str = "cx/gpt-6.1-terra"
     llm_fallback_enabled: bool = False
     asr_model: str = "dg/nova-3"
