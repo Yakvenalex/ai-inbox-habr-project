@@ -9,7 +9,7 @@ from typing import Any
 from ai_inbox.domain.entities import ChatRun, Conversation, Message
 from ai_inbox.domain.errors import AppError, AssistantFailure, Conflict, InvalidInput
 
-from .chat_outgoing import confirms_sending, delivery_answer, pending_review
+from .chat_outgoing import delivery_answer, pending_review
 from .ports import AssistantGateway, ChatEventSink, Clock, FileStorage, UowFactory
 from .tasks import public
 from .tools import AssistantTools
@@ -21,7 +21,7 @@ class ChatWithAssistant:
         uow: UowFactory,
         assistant: AssistantGateway,
         storage: FileStorage,
-        tools_factory: Callable[[str, str], AssistantTools],
+        tools_factory: Callable[[str, list[str]], AssistantTools],
         clock: Clock,
     ):
         self.uow, self.assistant, self.storage = uow, assistant, storage
@@ -166,16 +166,18 @@ class ChatWithAssistant:
             async with self.uow() as uow:
                 # A review applies only to the next user turn in this conversation.
                 # Revoke it durably BEFORE any model/tool/SMTP call, including crashes.
-                review = conversation.pending_email
-                confirmed_send = bool(review and not image_id and confirms_sending(text))
+                review = conversation.pending_email if not image_id else None
                 conversation.pending_email = None
+                user_messages = [
+                    m.text
+                    for m in await uow.messages.list(conversation_id=conversation_id, role="user")
+                ] + [text]
                 await uow.conversations.save(conversation)
                 await uow.runs.add(run)
                 await uow.messages.add(user)
                 await uow.commit()
-            tools = self.tools_factory(conversation_id + ":" + request_id, text)
-            if confirmed_send:
-                tools.confirmed_email = review
+            tools = self.tools_factory(conversation_id + ":" + request_id, user_messages)
+            tools.reviewed_email = review
             partial_text = ""
 
             async def notify(event: dict[str, Any]) -> None:
@@ -205,28 +207,16 @@ class ChatWithAssistant:
             error = None
             try:
                 await notify({"type": "status", "phase": "thinking"})
-                if confirmed_send:
-                    # Confirmation does not need a model to choose whether/what to send.
-                    result = await execute("send_outgoing_email", {}, "confirmed-send")
-                    answer, error = delivery_answer(result)
-                    conversation.sdk_history = history + [
-                        {
-                            "role": "assistant",
-                            "content": answer + "\n" + json.dumps(result, ensure_ascii=False),
-                        }
-                    ]
-                    run.status = "failed" if error else "completed"
+                # The agent interprets the current message in context and chooses tools.
+                # The application only enforces draft version / turn / idempotency guards.
+                if emit is not None:
+                    answer, sdk_history = await self.assistant.chat_stream(
+                        inputs, execute, self.clock.now(), notify
+                    )
                 else:
-                    if emit is not None:
-                        answer, sdk_history = await self.assistant.chat_stream(
-                            inputs, execute, self.clock.now(), notify
-                        )
-                    else:
-                        answer, sdk_history = await self.assistant.chat(
-                            inputs, tools, self.clock.now()
-                        )
-                    conversation.sdk_history = self._deflate(sdk_history, image_urls)
-                    run.status = "completed"
+                    answer, sdk_history = await self.assistant.chat(inputs, tools, self.clock.now())
+                conversation.sdk_history = self._deflate(sdk_history, image_urls)
+                run.status = "completed"
             except AppError as exc:
                 error, answer, run.status = exc.code, str(exc), "failed"
             except Exception as exc:
@@ -237,12 +227,20 @@ class ChatWithAssistant:
                     "failed",
                 )
             actions = await tools.actions()
+            sends = [a for a in actions if a["name"] == "send_outgoing_email"]
+            if sends:
+                # A provider outage after SMTP must never hide the actual delivery receipt.
+                receipt_text, receipt_error = delivery_answer(sends[0]["result"])
+                answer = receipt_text + ("\n\n" + answer if error else "")
+                error = receipt_error or error
+                run.status = "failed" if error else "completed"
+                conversation.sdk_history.append({"role": "assistant", "content": receipt_text})
             if error:
                 if partial_text.strip():
                     answer += "\n\nНезавершённый текст модели (ответ прерван):\n\n" + partial_text
                 successful = [a for a in actions if not a["result"].get("error")]
                 prepared = [a for a in successful if a["name"] == "prepare_outgoing_email"]
-                if confirmed_send:
+                if sends:
                     if error == "internal_error":
                         answer += (
                             "\n\nПроверь статус в исходящих перед любыми дальнейшими действиями."
@@ -280,12 +278,16 @@ class ChatWithAssistant:
                 updated_at=self.clock.now(),
             )
             conversation.pending_email = (
-                pending_review(actions, assistant_message.id) if not confirmed_send else None
+                pending_review(actions, assistant_message.id)
+                if not any(
+                    a["result"].get("status") in {"sent", "sending", "unknown"} for a in sends
+                )
+                else None
             )
             if conversation.pending_email:
                 confirmation_hint = (
                     "Проверь получателя, тему, текст и вложения в карточке черновика ниже. "
-                    "Если всё верно, ответь «Всё ок, отправляй»."
+                    "Если всё верно, подтверди отправку отдельным сообщением своими словами."
                 )
                 assistant_message.text += "\n\n" + confirmation_hint
                 for action in actions:

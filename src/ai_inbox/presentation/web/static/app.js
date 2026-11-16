@@ -698,7 +698,7 @@ function renderMessage(message) {
         receipt.append(node('p', 'mt-2 font-semibold break-words', 'Тема: ' + result.subject));
         receipt.append(node('p', 'mt-2 whitespace-pre-wrap break-words text-sm', result.body));
         receipt.append(node('p', 'mt-2 opacity-70', result.attachments?.length ? 'Вложения: ' + result.attachments.map(file => file.name + ' (' + file.size + ' байт)').join(', ') : 'Без вложений'));
-        if (result.confirmation_available) receipt.append(node('p', 'chat-email-confirmation mt-3 font-medium', 'Для отправки ответь: «Всё ок, отправляй».'));
+        if (result.confirmation_available) receipt.append(node('p', 'chat-email-confirmation mt-3 font-medium', 'Проверь письмо и подтверди отправку отдельным сообщением своими словами.'));
         const a = node('a', 'link', 'Открыть письмо для проверки');
         a.href = '/?view=compose&outgoing=' + encodeURIComponent(result.id);
         receipt.append(a);

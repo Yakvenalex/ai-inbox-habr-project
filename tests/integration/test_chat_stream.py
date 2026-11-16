@@ -98,13 +98,14 @@ async def test_streamed_confirmation_and_replay_send_once(client):
     c.assistant.steps = [("prepare_outgoing_email", LETTER)]
     id = await conversation(c)
     await c.chat(id, "Напиши письмо для reader@example.test", str(uuid4()))
+    c.assistant.steps = [("send_outgoing_email", {})]
     request_id = str(uuid4())
     job = await c.streams.open(id, "Всё ок, отправляй", request_id)
     events = [event async for event in job.subscribe()]
     result = events[-1]["result"]
     assert result["actions"][0]["result"]["status"] == "sent"
     assert any(e["type"] == "tool_start" and e["name"] == "send_outgoing_email" for e in events)
-    assert len(c.sender.messages) == 1 and c.assistant.calls == 1
+    assert len(c.sender.messages) == 1 and c.assistant.calls == 2
     # Eviction/restart of the in-memory replay cache must still use SQLite idempotency.
     await job.task
     job.finished_at -= 400

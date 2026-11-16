@@ -183,41 +183,74 @@ async def check_chat_send(c):
     original_sender = c.outbox.sender
     c.outbox.sender = simulated
     try:
-        conversation = await c.chat.create_conversation("Synthetic confirmed chat send")
-        result = await c.chat(
-            conversation["id"],
-            "Отправь на почту reader@example.test приветствие и спроси, как дела. "
-            "Перепиши вежливо. Это синтетическая проверка.",
-            new_id(),
-        )
-        if result["status"] != "completed":
-            return {
-                "status": "provider_unavailable"
-                if result["error"] == "provider_unavailable"
-                else "failed",
-                "error": result["error"],
-                "real_messages_sent": 0,
-            }
-        previews = [
-            a["result"]
-            for a in result["actions"]
-            if a["name"] == "prepare_outgoing_email" and not a["result"].get("error")
+        cases = [
+            ("screenshot_approval", "отправляй. пойдет", True),
+            (
+                "contextual_approval",
+                "Согласовано. Пусть адресат уже ознакомится с этим вариантом.",
+                True,
+            ),
+            ("refusal", "Нет, пока не отправляй. Я еще подумаю.", False),
+            (
+                "edit_request",
+                "Вместо вопроса о делах пожелай хорошей недели. Пока не отправляй.",
+                False,
+            ),
         ]
-        assert len(previews) == 1 and previews[0]["confirmation_available"]
-        assert not simulated.messages, "Must not send while preparing"
-        request_id = new_id()
-        sent = await c.chat(conversation["id"], "Всё ок, отправляй", request_id)
-        assert sent["status"] == "completed"
-        assert sent["actions"][0]["result"]["status"] == "sent"
-        assert len(simulated.messages) == 1
-        assert simulated.messages[0].recipient == "reader@example.test"
-        assert simulated.messages[0].body == previews[0]["body"]
-        assert await c.chat(conversation["id"], "Всё ок, отправляй", request_id) == sent
-        assert len(simulated.messages) == 1
+        checked = []
+        for label, reply, should_send in cases:
+            before = len(simulated.messages)
+            conversation = await c.chat.create_conversation("Synthetic intent: " + label)
+            result = await c.chat(
+                conversation["id"],
+                "Подготовь письмо для reader@example.test: приветствие и вопрос, как дела. "
+                "Это синтетическая проверка.",
+                new_id(),
+            )
+            if result["status"] != "completed":
+                return {
+                    "status": "provider_unavailable"
+                    if result["error"] == "provider_unavailable"
+                    else "failed",
+                    "error": result["error"],
+                    "case": label,
+                    "real_messages_sent": 0,
+                }
+            previews = [
+                a["result"]
+                for a in result["actions"]
+                if a["name"] == "prepare_outgoing_email" and not a["result"].get("error")
+            ]
+            assert len(previews) == 1 and previews[0]["confirmation_available"]
+            assert len(simulated.messages) == before, "Must not send while preparing"
+            request_id = new_id()
+            decision = await c.chat(conversation["id"], reply, request_id)
+            if decision["status"] != "completed":
+                return {
+                    "status": "provider_unavailable"
+                    if decision["error"] == "provider_unavailable"
+                    else "failed",
+                    "error": decision["error"],
+                    "case": label,
+                    "simulated_sends": len(simulated.messages),
+                    "real_messages_sent": 0,
+                }
+            sends = [a for a in decision["actions"] if a["name"] == "send_outgoing_email"]
+            if should_send:
+                assert len(sends) == 1 and sends[0]["result"].get("status") == "sent", label
+                assert len(simulated.messages) == before + 1
+                assert simulated.messages[-1].recipient == "reader@example.test"
+                assert simulated.messages[-1].body == previews[0]["body"]
+            else:
+                assert not sends and len(simulated.messages) == before, label
+            assert await c.chat(conversation["id"], reply, request_id) == decision
+            assert len(simulated.messages) == before + int(should_send)
+            checked.append(label)
         return {
             "status": "passed",
             "model": "real",
             "smtp": "simulated",
+            "intent_cases": checked,
             "review_then_confirmation": True,
             "idempotent": True,
             "real_messages_sent": 0,

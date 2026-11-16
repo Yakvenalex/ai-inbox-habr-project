@@ -226,7 +226,7 @@ async def test_attachment_limits_and_type_and_csrf(client, auth):
     assert (await client.post("/api/v1/outbox", json=LETTER)).status_code == 403
 
 
-async def test_agent_can_prepare_but_not_send_and_cannot_invent_recipient(client, auth):
+async def test_agent_can_use_recipient_from_previous_owner_message_but_not_invent_it(client, auth):
     c = client.container
     c.assistant.steps = [
         (
@@ -249,8 +249,12 @@ async def test_agent_can_prepare_but_not_send_and_cannot_invent_recipient(client
     second = await c.chat(
         conversation["id"], "Подготовь письмо с просьбой проверить счёт.", str(uuid4())
     )
-    assert second["actions"][0]["result"]["error"]["code"] == "invalid_input"
-    assert len(await c.outbox.list()) == 1
+    assert second["actions"][0]["result"]["status"] == "draft"
+    assert len(await c.outbox.list()) == 2
+    other = await c.chat.create_conversation()
+    invented = await c.chat(other["id"], "Подготовь такое же письмо", str(uuid4()))
+    assert invented["actions"][0]["result"]["error"]["code"] == "invalid_input"
+    assert len(await c.outbox.list()) == 2 and not c.sender.messages
 
 
 async def test_confirmation_is_bound_to_reviewed_letter_content(client, auth):

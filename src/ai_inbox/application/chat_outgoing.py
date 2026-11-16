@@ -1,24 +1,10 @@
-"""Deterministic chat confirmation; model text never grants send permission."""
+"""Bind an agent's send call to a previously displayed draft and report its receipt."""
 
-import re
 from typing import Any
 
 from ai_inbox.domain.entities import PendingEmailReview, new_id
 
 REVIEW_TOOLS = {"prepare_outgoing_email", "review_outgoing_email"}
-
-
-def confirms_sending(text: str) -> bool:
-    if len(text) > 160 or any(char in text for char in "?\"«»'"):
-        return False
-    # Treat common typed dashes like commas; the whole phrase must still match.
-    normalized = re.sub(r"[-,.!;:–—]+", " ", text.lower().replace("ё", "е"))
-    normalized = " ".join(normalized.split())
-    phrase = (
-        r"да|ок|окей|все (?:ок|окей|хорошо|верно|правильно)|"
-        r"отправ(?:ляй(?:те)?|ь(?:те)?)(?: письмо)?|подтверждаю(?: отправку)?|можно отправлять"
-    )
-    return bool(re.fullmatch(rf"(?:{phrase})(?: (?:{phrase}))*", normalized))
 
 
 def pending_review(actions: list[dict[str, Any]], message_id: str) -> PendingEmailReview | None:

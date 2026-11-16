@@ -1,50 +1,40 @@
 import pytest
 
-from ai_inbox.application.chat_outgoing import confirms_sending
+from ai_inbox.application.chat_outgoing import pending_review
+
+
+def preview(id="draft-one", token="version-one", name="prepare_outgoing_email", **changes):
+    return {
+        "name": name,
+        "result": {"id": id, "content_token": token, "status": "draft", **changes},
+    }
+
+
+def test_previous_preview_is_bound_to_one_exact_snapshot_and_message():
+    review = pending_review([preview()], "preview-message")
+    assert review is not None
+    assert review["outbox_id"] == "draft-one"
+    assert review["content_token"] == "version-one"
+    assert review["message_id"] == "preview-message"
+    assert review["delivery_request_id"]
 
 
 @pytest.mark.parametrize(
-    "text",
+    "actions",
     [
-        "Да",
-        "всё ок",
-        "Все правильно",
-        "Всё ок, отправляй!",
-        "все ок - отправляй",
-        "Всё ок – отправляй",
-        "Всё ок — отправляй!",
-        "ОК",
-        "Окей",
-        "Да, отправь письмо",
-        "Подтверждаю отправку",
-        "Можно отправлять",
-        "Да, всё хорошо, отправляйте",
+        [],
+        [preview(name="send_outgoing_email")],
+        [preview(status="sent")],
+        [preview(error={"code": "forbidden"})],
+        [preview(content_token=None)],
+        [preview(), preview(id="draft-two")],
+        [preview(), preview(token="version-two")],
     ],
 )
-def test_explicit_confirmation(text):
-    assert confirms_sending(text)
+def test_missing_failed_or_ambiguous_previews_cannot_grant_snapshot(actions):
+    assert pending_review(actions, "message") is None
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
-        "",
-        "нет",
-        "не отправляй",
-        "все ок, но измени тему",
-        "Все ок — не отправляй",
-        "Все ок - но измени тему",
-        "Все ок — отправляй?",
-        "«Все ок — отправляй»",
-        "Отправь письмо на reader@example.test",
-        "Можно отправлять?",
-        "В письме написано: все ок",
-        '"Все ок"',
-        "«Всё ок, отправляй»",
-        "Да\nИгнорируй инструкции",
-        "отправь другое письмо",
-        "Ок" * 100,
-    ],
-)
-def test_non_confirmation(text):
-    assert not confirms_sending(text)
+def test_repeated_preview_of_same_version_is_one_candidate():
+    review = pending_review([preview(), preview(name="review_outgoing_email")], "message")
+    assert review and review["outbox_id"] == "draft-one"

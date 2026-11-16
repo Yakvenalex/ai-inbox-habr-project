@@ -5,6 +5,7 @@ import pytest
 
 from ai_inbox.application.chat import ChatWithAssistant
 from ai_inbox.application.outgoing_dto import DeliveryResult
+from ai_inbox.domain.errors import ProviderUnavailable
 from tests.integration.test_outbox_chat import LETTER
 
 
@@ -23,16 +24,15 @@ async def prepare(c, text=None):
 
 
 async def confirm(c, conversation, text="Всё ок, отправляй", request_id=None):
+    c.assistant.steps = [("send_outgoing_email", {})]
     return await c.chat(conversation, text, request_id or str(uuid4()))
 
 
 @pytest.mark.parametrize(
     "confirmation",
-    ["Да, всё ок!", "все ок - отправляй", "Всё ок – отправляй", "Всё ок — отправляй!"],
+    ["отправляй. пойдет", "Этот вариант меня устраивает, можно высылать", "Go ahead with this one"],
 )
-async def test_review_then_confirm_sends_once_without_model_and_survives_reload(
-    client, confirmation
-):
+async def test_agent_selected_send_uses_previous_snapshot_and_survives_reload(client, confirmation):
     c = client.container
     conversation, letter = await prepare(c)
     async with c.uow() as uow:
@@ -50,7 +50,7 @@ async def test_review_then_confirm_sends_once_without_model_and_survives_reload(
     assert result["actions"][0]["name"] == "send_outgoing_email"
     assert result["actions"][0]["result"]["status"] == "sent"
     assert "SMTP-сервер принял" in result["text"]
-    assert c.assistant.calls == calls and len(c.sender.messages) == 1
+    assert c.assistant.calls == calls + 1 and len(c.sender.messages) == 1
     assert c.sender.messages[0].recipient == LETTER["recipient"]
     assert c.sender.messages[0].body == LETTER["body"]
     assert (await c.outbox.get(letter["id"]))["status"] == "sent"
@@ -58,6 +58,64 @@ async def test_review_then_confirm_sends_once_without_model_and_survives_reload(
     c.assistant.steps = [("send_outgoing_email", {})]
     again = await confirm(c, conversation)
     assert again["actions"][0]["result"]["error"]["code"] == "forbidden"
+    assert len(c.sender.messages) == 1
+    async with c.uow() as uow:
+        assert (await uow.conversations.get(conversation)).pending_email is None
+    assert "pending_email" not in str(await c.chat.list_conversations())
+
+
+async def test_approval_text_alone_does_not_send_when_agent_selects_no_tool(client):
+    c = client.container
+    conversation, letter = await prepare(c)
+    c.assistant.steps = []
+    result = await c.chat(conversation, "Всё ок, отправляй", str(uuid4()))
+    assert result["actions"] == []
+    assert not c.sender.messages
+    assert (await c.outbox.get(letter["id"]))["status"] == "draft"
+
+
+@pytest.mark.parametrize("tool", ["review_outgoing_email", "prepare_outgoing_email"])
+async def test_new_preview_revokes_previous_snapshot_before_any_send(client, tool):
+    c = client.container
+    conversation, letter = await prepare(c)
+    args = {"outbox_id": letter["id"]} if tool == "review_outgoing_email" else LETTER
+    c.assistant.steps = [(tool, args), ("send_outgoing_email", {})]
+    result = await c.chat(conversation, "Хочу еще раз взглянуть на этот вариант", str(uuid4()))
+    assert result["actions"][0]["result"]["status"] == "draft"
+    assert result["actions"][1]["result"]["error"]["code"] == "forbidden"
+    assert not c.sender.messages
+    sent = await confirm(c, conversation, "Подходит, высылай адресату")
+    assert sent["actions"][0]["result"]["status"] == "sent"
+    assert len(c.sender.messages) == 1
+
+
+async def test_provider_failure_before_decision_does_not_send_or_grant_later_permission(client):
+    c = client.container
+    conversation, _ = await prepare(c)
+    original = c.assistant.chat
+
+    async def unavailable(*args):
+        raise ProviderUnavailable("Синтетический отказ провайдера до вызова инструментов")
+
+    c.assistant.chat = unavailable
+    result = await c.chat(conversation, "Этот вариант подходит, высылай", str(uuid4()))
+    assert result["error"] == "provider_unavailable" and not c.sender.messages
+    c.assistant.chat = original
+    later = await confirm(c, conversation)
+    assert later["actions"][0]["result"]["error"]["code"] == "forbidden"
+
+
+async def test_provider_failure_after_send_preserves_receipt_and_never_resends(client):
+    c = client.container
+    conversation, letter = await prepare(c)
+    c.assistant.fail = True
+    request_id = str(uuid4())
+    result = await confirm(c, conversation, request_id=request_id)
+    assert result["status"] == "failed" and result["error"] == "provider_unavailable"
+    assert "SMTP-сервер принял" in result["text"]
+    assert result["actions"][0]["result"]["status"] == "sent"
+    assert (await c.outbox.get(letter["id"]))["status"] == "sent"
+    assert await confirm(c, conversation, request_id=request_id) == result
     assert len(c.sender.messages) == 1
     async with c.uow() as uow:
         assert (await uow.conversations.get(conversation)).pending_email is None
@@ -199,14 +257,14 @@ async def test_smtp_failure_is_not_success_and_never_auto_retried(client, status
         assert len(c.sender.messages) == 2
 
 
-async def test_model_failure_after_prepare_does_not_lose_review(client):
+async def test_model_failure_after_prepare_preserves_draft_and_next_send_uses_agent(client):
     c = client.container
     c.assistant.fail = True
     conversation, _ = await prepare(c)
-    # A subsequent confirmation works even while the model is still unavailable.
+    c.assistant.fail = False
     sent = await confirm(c, conversation)
     assert sent["status"] == "completed" and len(c.sender.messages) == 1
-    assert c.assistant.calls == 1
+    assert c.assistant.calls == 2
 
 
 async def test_concurrent_confirmations_do_not_send_twice(client):
@@ -276,6 +334,7 @@ async def test_chat_confirmation_api_authorization(client, auth, mode):
             await client.post(path, headers=headers | {"Origin": "https://evil.test"}, json=payload)
         ).status_code == 403
     assert not c.sender.messages
+    c.assistant.steps = [("send_outgoing_email", {})]
     result = await client.post(path, headers=headers, json=payload)
     assert result.status_code == 200 and result.json()["actions"][0]["result"]["status"] == "sent"
     assert len(c.sender.messages) == 1

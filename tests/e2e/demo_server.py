@@ -29,7 +29,11 @@ class DemoAssistant(FakeAssistant):
             else next(item["text"] for item in content if item["type"] == "input_text")
         )
         lower = text.lower()
-        if "стриминг" in lower:
+        if lower in {"отправляй. пойдет", "всё ок, отправляй"}:
+            # Scripted offline fixture only; production intent is selected by the LLM.
+            result = await execute("send_outgoing_email", {}, "demo-send")
+            answer = "Результат тестовой отправки показан ниже."
+        elif "стриминг" in lower:
             result = await execute("list_tasks", {"status": "open"}, "demo-stream-tasks")
             answer = (
                 "## Ответ появляется постепенно\n\n"

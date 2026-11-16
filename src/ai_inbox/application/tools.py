@@ -35,66 +35,16 @@ class AssistantTools:
         digests: GenerateDigest,
         outbox: Outbox,
         request_id: str,
-        user_text: str,
+        user_messages: list[str],
     ):
         self.uow, self.tasks, self.drafts = uow, tasks, drafts
         self.mail, self.digests, self.request_id = mail, digests, request_id
         self.outbox = outbox
-        self.user_text = user_text.lower()
+        # Only actual owner messages, never mail/tool/model text, can supply a new address.
+        self.user_messages = user_messages
         self.lock = asyncio.Lock()
-        self.confirmed_email: PendingEmailReview | None = None
-
-    def _outgoing_requested(self) -> bool:
-        if re.search(
-            r"(напиш|состав|подготов|созда).{0,100}(письм|сообщен|ответ)",
-            self.user_text,
-            re.DOTALL,
-        ):
-            return True
-        # A request to send can authorize preparing a LOCAL draft only.
-        # Recipient validation still requires the address in the user's own text.
-        for match in re.finditer(
-            r"\b(отправь(?:те)?|отправить|отошли(?:те)?|вышли(?:те)?|"
-            r"пришли(?:те)?|перешли(?:те)?)\b",
-            self.user_text,
-        ):
-            prefix = self.user_text[: match.start()]
-            if not re.search(r"\bне(?:\s+\w+){0,3}\s*$", prefix):
-                return True
-        return False
-
-    def _allow_write(self, name: str) -> None:
-        if name == "send_outgoing_email" and self.confirmed_email is None:
-            raise Forbidden(
-                "Сначала покажи черновик. Отправка разрешена только после отдельного "
-                "подтверждения владельца в следующем сообщении."
-            )
-        if name == "review_outgoing_email" and not re.search(
-            r"(покаж|проверь|открой|просмотр|посмотр|проверим).{0,100}(письм|чернов)|"
-            r"(письм|чернов).{0,100}(покаж|еще раз|ещё раз|актуальн)",
-            self.user_text,
-            re.DOTALL,
-        ):
-            raise Forbidden("Просмотр черновика перед отправкой не запрошен пользователем.")
-        if name == "prepare_outgoing_email" and not self._outgoing_requested():
-            raise Forbidden(
-                "Подготовка письма не запрошена. Попроси написать письмо и укажи адрес получателя."
-            )
-        patterns = {
-            "create_task": r"((созда|добав|постав|запиш|сохрани|извле).{0,100}задач|напомн)",
-            "complete_task": r"(заверш|закро|отмет.{0,40}(готов|выполн)|задач.{0,40}выполн)",
-            "create_draft": r"(чернов|подготов.{0,30}ответ|ответь|ответ на|состав.{0,30}ответ)",
-            "generate_digest": r"(дайджест|digest)",
-        }
-        if name in {"read_email", "list_unread_emails"} and not re.search(
-            r"(почт|входящ|непрочитан|чернов|ответ|дайджест|сводк|email:|"
-            r"(прочита|покаж|список|последн).{0,50}письм)",
-            self.user_text,
-        ):
-            raise Forbidden("Чтение почты не запрошено пользователем.")
-        pattern = patterns.get(name)
-        if pattern and not re.search(pattern, self.user_text):
-            raise Forbidden("Изменение не запрошено пользователем. Уточни намерение в чате.")
+        # Capability for the previous turn's snapshot; intent is decided by the agent.
+        self.reviewed_email: PendingEmailReview | None = None
 
     async def __call__(self, name: str, arguments: dict[str, Any], call_id: str) -> dict[str, Any]:
         async with self.lock:
@@ -112,7 +62,9 @@ class AssistantTools:
                 if cached := await existing_action(uow, key):
                     return cached
             try:
-                self._allow_write(name)
+                if name in {"prepare_outgoing_email", "review_outgoing_email"}:
+                    # A new/repeated preview needs a NEW owner turn before sending.
+                    self.reviewed_email = None
                 metadata = {"key": key, "request_id": self.request_id, "call_id": call_id}
                 result = await self._dispatch(name, arguments, metadata)
             except AppError as exc:
@@ -168,14 +120,6 @@ class AssistantTools:
         if name == "read_email":
             return await self.mail.read(text_arg(args, "email_id", 500))
         if name == "create_task":
-            date_mentioned = re.search(
-                r"(завтра|сегодня|послезавтра|\d{1,2}[./]\d{1,2}|\d{4}-\d{2}-\d{2})", self.user_text
-            )
-            time_mentioned = re.search(
-                r"(\d{1,2}:\d{2}|в \d{1,2}\s*(час|утра|вечера)|полдень|полночь)", self.user_text
-            )
-            if date_mentioned and not time_mentioned:
-                raise InvalidInput("Уточни время и часовой пояс срока: одной даты недостаточно.")
             due_at = args["due_at"]
             if due_at is not None:
                 due_at = datetime.fromisoformat(text_arg(args, "due_at", 50))
@@ -209,9 +153,13 @@ class AssistantTools:
                 )
             return {**result, "delivery_error": result.get("error"), "error": None}
         if name == "send_outgoing_email":
-            review = self.confirmed_email
+            review = self.reviewed_email
             if review is None:
-                raise Forbidden("Отправка не подтверждена владельцем.")
+                raise Forbidden(
+                    "Нет черновика, показанного перед текущим сообщением. Покажи актуальный "
+                    "черновик и дождись отдельного подтверждения владельца."
+                )
+            self.reviewed_email = None
             # The model cannot choose the recipient, body, target ID or content token.
             return await self.outbox.send(
                 review["outbox_id"], review["delivery_request_id"], True, review["content_token"]
@@ -219,7 +167,8 @@ class AssistantTools:
         if name == "prepare_outgoing_email":
             recipient = text_arg(args, "recipient", 254)
             if not re.search(
-                r"(?<![\w.+-])" + re.escape(recipient.lower()) + r"(?![\w.-])", self.user_text
+                r"(?<![\w.+-])" + re.escape(recipient.lower()) + r"(?![\w.-])",
+                "\n".join(self.user_messages).lower(),
             ):
                 raise InvalidInput("Сначала попроси пользователя явно указать адрес получателя.")
             return await self.outbox.save(

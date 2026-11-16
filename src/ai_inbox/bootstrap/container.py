@@ -120,7 +120,7 @@ class Container:
             self.uow,
             self.assistant,
             self.storage,
-            lambda request_id, user_text: AssistantTools(
+            lambda request_id, user_messages: AssistantTools(
                 self.uow,
                 self.tasks,
                 self.drafts,
@@ -128,7 +128,7 @@ class Container:
                 self.digests,
                 self.outbox,
                 request_id,
-                user_text,
+                user_messages,
             ),
             self.clock,
         )
